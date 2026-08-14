@@ -104,13 +104,15 @@ export function formatDuration(ms: number): string {
 /**
  * Cache-hit share of prompt-side input over the whole durable log.
  * @param usage - the session's token-usage projection value.
- * @returns rounded integer percent, or null when no input was billed.
+ * @returns percent cut to two decimals, never rounded, or null when no input was billed.
  */
 export function cacheHitPercent(usage: TokenUsageProjection): number | null {
   const denominator = billedInputTokens(usage)
   return denominator === 0
     ? null
-    : Math.round(usage.cacheReadTokens / denominator * 100)
+    // The floor runs in integer token arithmetic (×10_000), so float
+    // representation cannot tip a reading like 99.99 over to 100.00.
+    : Math.floor(usage.cacheReadTokens * 10_000 / denominator) / 100
 }
 
 /**
@@ -197,7 +199,7 @@ export const StatsLine = memo(function StatsLine({ useSession, useProjection, t 
   if (usage !== undefined
     && (billedInputTokens(usage) > 0 || usage.outputTokens > 0)) {
     const cacheHit = cacheHitPercent(usage)
-    if (cacheHit !== null) groups.push(t('stats.cacheHit', { percent: cacheHit }))
+    if (cacheHit !== null) groups.push(t('stats.cacheHit', { percent: cacheHit.toFixed(2) }))
     groups.push(t('stats.tokens', {
       input: formatTokens(billedInputTokens(usage)),
       output: formatTokens(usage.outputTokens),
