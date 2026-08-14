@@ -21,7 +21,8 @@ import { createAppearanceRowStore } from './settings-store.ts'
 import { installThemeStyles } from './styles.ts'
 import { en, zh, type ThemeKey } from './locales.ts'
 import {
-  DEFAULT_PREFERENCE, isThemePreference, THEME_PREFERENCE_FIELD, THEME_SETTINGS_NAMESPACE,
+  DEFAULT_OUTPUT_TINT, DEFAULT_PREFERENCE, isThemePreference, OUTPUT_TINT_FIELD,
+  THEME_PREFERENCE_FIELD, THEME_SETTINGS_NAMESPACE,
   type ThemePreference, type ThemeSettings,
 } from '../theme-settings.ts'
 
@@ -83,6 +84,11 @@ export interface ThemeSnapshot {
   active: ThemeDefinition
   /** Registered themes in registration order. */
   themes: readonly ThemeDefinition[]
+  /**
+   * Assistant-output tint color (CSS color; empty disables). The chat view
+   * paints the assistant text output with it, dimmed on the dark palette.
+   */
+  outputTint: string
   /** Monotonic change counter (registry or active changes). */
   revision: number
 }
@@ -153,6 +159,7 @@ export class ThemeRuntime {
   private readonly host: SettingsScope<ThemeSettings>
   private themes: ThemeDefinition[] = [...BUILTIN_THEMES]
   private preference: ThemePreference
+  private outputTint: string = DEFAULT_OUTPUT_TINT
   private revision = 0
   private snapshot: ThemeSnapshot
   private readonly media: MediaQueryList | undefined
@@ -230,12 +237,35 @@ export class ThemeRuntime {
     this.publish()
   }
 
-  /** Adopt the scope's accepted durable preference without writing it back. */
+  /**
+   * Set the assistant-output tint color — the second user preference write
+   * entry. The empty string disables the tint; every accepted value emits
+   * the theme/change event.
+   * @param color - CSS color the chat view paints the assistant text output
+   * with; the empty string clears the tint.
+   */
+  setOutputTint(color: string): void {
+    if (this.outputTint === color) return
+    this.outputTint = color
+    void this.host.set(OUTPUT_TINT_FIELD, color)
+    this.publish()
+  }
+
+  /** Adopt the scope's accepted durable preferences without writing them back. */
   private adopt(): void {
     const section = this.host.getSnapshot().value
-    if (section === undefined || this.preference === section.preference) return
-    this.preference = section.preference
-    this.publish()
+    if (section === undefined) return
+    let changed = false
+    if (this.preference !== section.preference) {
+      this.preference = section.preference
+      changed = true
+    }
+    // The settings wire always delivers the schema-defaulted outputTint.
+    if (this.outputTint !== section.outputTint) {
+      this.outputTint = section.outputTint
+      changed = true
+    }
+    if (changed) this.publish()
   }
 
   /**
@@ -303,6 +333,7 @@ export class ThemeRuntime {
       preference: this.preference,
       active: this.composeActive(active),
       themes: Object.freeze([...this.themes]),
+      outputTint: this.outputTint,
       revision: this.revision,
     })
   }
@@ -393,7 +424,7 @@ export function apply(ctx: ClientContext): void {
   const store = createAppearanceRowStore()
   let bound: BoundActions<typeof store> | undefined
   const sync = (snapshot: ThemeSnapshot): void => {
-    bound?.sync(snapshot.preference, snapshot.revision)
+    bound?.sync(snapshot.preference, snapshot.outputTint, snapshot.revision)
   }
   ctx.on('theme/change', sync)
   const injected = (actions: BoundActions<typeof store>): AppearanceRowInjected => {
@@ -403,6 +434,7 @@ export function apply(ctx: ClientContext): void {
     sync(theme.getTheme())
     return {
       setTheme: (id) => { theme.setTheme(id) },
+      setOutputTint: (color) => { theme.setOutputTint(color) },
     }
   }
   ctx.slots.inject('settings.general.item', () => ctx.slots.register({

@@ -10,7 +10,7 @@
 // turn's transcript tail. Think / tool-head-only nodes stay chrome-free.
 
 import { Fragment, memo, useMemo } from 'react'
-import type { ReactNode } from 'react'
+import type { CSSProperties, ReactNode } from 'react'
 import type { AssistantBlock } from '@deepseek-ai/dsh-client-runtime/client'
 import { JsonBlock, MarkdownText } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { MarkdownFileMentions } from '@deepseek-ai/dsh-client-ui-primitives'
@@ -27,14 +27,25 @@ export interface AssistantMarkdownProps {
   renderMessageImages: ChatNodeOwnerProps['renderMessageImages']
   /** Resolved prose file mentions for this Assistant's closing turn. */
   mentions?: MarkdownFileMentions | undefined
+  /**
+   * Assistant-output tint color (Appearance setting; empty disables). Text
+   * blocks render inside a tinted card with this color, dimmed on the dark
+   * palette; reasoning and tool-call heads stay outside it.
+   */
+  outputTint?: string | undefined
   /** The owning view's locale seat, passed down as a plain prop. */
   t: ChatViewSlotProps['t']
 }
 
 /** Reasoning block as the Think variant summary row (figma 39:28304). */
 export const AssistantMarkdown = memo(function AssistantMarkdown({
-  blocks, streaming, interrupted, renderMessageImages, mentions, t,
+  blocks, streaming, interrupted, renderMessageImages, mentions, outputTint, t,
 }: AssistantMarkdownProps) {
+  // The tint rides a per-instance CSS variable so the dark palette can dim
+  // the user's color with color-mix instead of hardcoding a dark twin.
+  const tintStyle = outputTint === undefined || outputTint === ''
+    ? undefined
+    : { '--dsh-output-tint': outputTint } as CSSProperties
   // Stable per locale revision (t identity changes on switch): a fresh object
   // per render would rebuild MarkdownText's component table every chunk.
   const codeLabels = useMemo(() => ({ copyLabel: t('copy'), copiedLabel: t('copied') }), [t])
@@ -53,13 +64,14 @@ export const AssistantMarkdown = memo(function AssistantMarkdown({
     switch (block.kind) {
       case 'text':
         rendered.push(
-          <MarkdownText
-            key={i}
-            text={block.text}
-            streaming={streaming}
-            codeLabels={codeLabels}
-            fileMentions={mentions}
-          />,
+          <div key={i} className={tintStyle === undefined ? undefined : css.textTint} style={tintStyle}>
+            <MarkdownText
+              text={block.text}
+              streaming={streaming}
+              codeLabels={codeLabels}
+              fileMentions={mentions}
+            />
+          </div>,
         )
         break
       case 'reasoning':

@@ -2,8 +2,8 @@
 import type { ReactNode, RefObject } from 'react'
 import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import type {
-  InjectFace, MaybeSnapshotSelectorHook, PropsLocale, PropsRenderSlots, PropsRuntime, PropsStore,
-  SlotHookFactory, SnapshotSelectorHook,
+  HostObservable, InjectFace, MaybeSnapshotSelectorHook, PropsLocale, PropsRenderSlots,
+  PropsRuntime, PropsStore, SlotHookFactory, SnapshotSelectorHook,
 } from '@deepseek-ai/dsh-client-ui-slots'
 import type {
   CommandNode, CompactionSummaryNode, ConversationSnapshot, ConversationTurnDataMap,
@@ -404,6 +404,12 @@ export interface ChatNodeOwnerProps {
   /** Render a historical image group through the attachment slot. */
   renderMessageImages: RenderMessageImages
   fileMentions: (owner: TurnTailOwnerProps) => MarkdownFileMentions | undefined
+  /**
+   * Assistant-output tint color (Appearance setting; empty disables). The
+   * assistant renderer paints its text output with it, dimmed on the dark
+   * palette.
+   */
+  outputTint?: string | undefined
 }
 
 /** Full props of one registered keyed Chat business renderer. */
@@ -758,13 +764,20 @@ export interface ChatViewInjected {
    * absent or the turn produced nothing worth linking.
    */
   fileMentions: (owner: TurnTailOwnerProps) => MarkdownFileMentions | undefined
+  hooks: {
+    /**
+     * Persisted assistant-output tint color (empty disables), mirrored from
+     * the theme snapshot and bound as useOutputTint.
+     */
+    outputTint: HostObservable<string>
+  }
 }
 
 /** Full chat-view component props: runtime & its Tool/command/tail render shares & store & injected & locale seat. */
 export type ChatViewSlotProps =
   PropsRuntime<'conversation.view'>
   & PropsRenderSlots<'conversation.chat.node' | 'conversation.message.images'>
-  & PropsStore<ChatStore> & ChatViewInjected & PropsLocale<'conversation'>
+  & PropsStore<ChatStore> & InjectFace<ChatViewInjected> & PropsLocale<'conversation'>
 
 /** Full props of the attachment plugin's composer entry. */
 export type ComposerAttachmentsProps =

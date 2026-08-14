@@ -39,6 +39,15 @@
   - button "跟随系统" [pressed]:
     - img
     - text: 跟随系统
+  - text: 模型回复输出背景 为模型回复的文字输出添加自定义底色，便于与思考过程和工具调用区分
+  - switch "模型回复输出背景开关"
+  - 'button "预设颜色 #E7F5F8"'
+  - 'button "预设颜色 #E4F1FC"'
+  - 'button "预设颜色 #E9F5EB"'
+  - 'button "预设颜色 #F4F0FA"'
+  - 'button "预设颜色 #FBF1E7"'
+  - 'button "预设颜色 #FBEEEF"'
+  - textbox "自定义颜色": "#e7f5f8"
   - text: 繁忙时 Enter 键行为 仅在智能体运行时生效；Cmd/Ctrl+Enter 使用另一行为
   - button "排队发送":
     - text: 排队发送

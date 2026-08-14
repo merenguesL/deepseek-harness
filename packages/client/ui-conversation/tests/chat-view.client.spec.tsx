@@ -165,6 +165,8 @@ function makeHarness(init?: Partial<ConversationSnapshot>) {
   // Selection rides the REAL chat store (same construction path as
   // production; the view reads it through the PropsStore useStore share).
   const chat = createChatStore().create()
+  // Output tint mirrors the apply.ts theme-snapshot store (scriptable here).
+  const outputTint = createSnapshotStore<string>('')
   const t = makeTranslate(zh, commonZh)
   const toolOwners: Array<{
     callId: string
@@ -289,13 +291,15 @@ function makeHarness(init?: Partial<ConversationSnapshot>) {
     forkAt,
     // Absent-service default; mention tests override with a real resolver.
     fileMentions: () => undefined,
+    useOutputTint: bindSnapshotSelector(outputTint),
     // Mirrors the real lookup chain (conversation namespace, then common).
     t,
   }
   const setSelection = (next: SelectionTarget | null): void => { chat.actions.select(next) }
+  const setOutputTint = (value: string): void => { outputTint.set(value) }
   return {
     set, ChatView, props, openDetails, openFile, loadOlder, inspectCall,
-    chatScroll, forkAt, setSelection, toolOwners,
+    chatScroll, forkAt, setSelection, setOutputTint, toolOwners,
   }
 }
 
@@ -817,6 +821,27 @@ describe('ChatView', () => {
     })
     expect(view.getByText('已停止')).toBeTruthy()
     expect(view.container.querySelectorAll('h1')).toHaveLength(2)
+  })
+
+  it('tints the assistant text output with the Appearance color, leaving reasoning and user text alone', () => {
+    const h = makeHarness({
+      nodes: [user(1, 'user words'), assistant(2, 'answer words')],
+      turnEnds: new Map([[1, 2]]),
+    })
+    const view = render(<h.ChatView {...h.props} />)
+    const tinted = (): HTMLElement | undefined => [...view.container.querySelectorAll<HTMLElement>('div')]
+      .find(el => el.style.getPropertyValue('--dsh-output-tint') !== '')
+    // Default: no tint anywhere.
+    expect(tinted()).toBeUndefined()
+
+    act(() => { h.setOutputTint('#E7F5F8') })
+    const card = tinted()
+    expect(card?.style.getPropertyValue('--dsh-output-tint')).toBe('#E7F5F8')
+    expect(card?.textContent).toContain('answer words')
+    expect(card?.textContent).not.toContain('user words')
+
+    act(() => { h.setOutputTint('') })
+    expect(tinted()).toBeUndefined()
   })
 
   it('streaming partial frames update the tail without replacing a sibling Tool row', () => {

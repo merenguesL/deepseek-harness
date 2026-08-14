@@ -2,12 +2,15 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { resolveSlotLabel, type BoundActions } from '@deepseek-ai/dsh-client-ui-slots'
 import {
-  resolveWorkspacePath, type ISessions, type SessionId,
+  createSnapshotStore, resolveWorkspacePath, type ISessions, type SessionId,
 } from '@deepseek-ai/dsh-client-runtime/client'
 // Type-only: the ctx.settingsScope Context merge. Cross-plugin collaboration
 // goes through the service, never a value import (client bundle purity gate).
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
+// Type-only: the theme service face (soft dependency — the output tint
+// mirrors the theme snapshot only when the theme plugin is composed).
+import type {} from '@deepseek-ai/dsh-client-ui-theme/client'
 // Type-only: pulls the locale plugin's Context merge (ctx.locale).
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type { ViewTab } from './contract/views.ts'
@@ -149,6 +152,18 @@ export function apply(ctx: Context): void {
   // width reflow when the tab ring remounts the view. Deliberately not
   // persisted: a fresh page load keeps the open-jump-to-bottom default.
   const chatScrollPositions = new Map<SessionId, ChatScrollPosition>()
+
+  // Assistant-output tint mirror: the Appearance setting lives with the theme
+  // plugin (soft dependency — an absent theme keeps the default off state;
+  // the event subscription catches the theme's own construction publish).
+  const outputTint = createSnapshotStore<string>('')
+  const syncOutputTint = (): void => {
+    const theme = ctx.get('theme')
+    if (theme === undefined) return
+    outputTint.set(theme.getTheme().outputTint)
+  }
+  syncOutputTint()
+  ctx.effect(() => ctx.on('theme/change', () => { syncOutputTint() }), 'ui-conversation: output tint mirror')
 
   const viewTabs = (): ViewTab[] => {
     const tabs: ViewTab[] = []
@@ -422,6 +437,7 @@ export function apply(ctx: Context): void {
               // Fork or child-rename failure keeps the source view untouched.
             })
         },
+        hooks: { outputTint },
       }
     },
   }, ChatView)

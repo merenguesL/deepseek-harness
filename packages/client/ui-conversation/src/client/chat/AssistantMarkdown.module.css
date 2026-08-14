@@ -17,6 +17,19 @@
   gap: 16px;
 }
 
+/* Tinted output card (Appearance → output tint): the user-chosen color at
+   full strength in light mode; the dark palette dims the same hue with
+   color-mix so the card never glows against the dark surfaces. */
+.textTint {
+  border-radius: 12px;
+  padding: 12px 16px;
+  background: var(--dsh-output-tint);
+}
+
+:global(body[data-ds-dark-theme]) .textTint {
+  background: color-mix(in srgb, var(--dsh-output-tint) 24%, transparent);
+}
+
 /* Interrupted-turn terminal marker: quiet inline tag, no animation. */
 .stopped {
   align-self: flex-start;

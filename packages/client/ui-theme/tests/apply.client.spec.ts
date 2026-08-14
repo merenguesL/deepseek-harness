@@ -32,10 +32,11 @@ async function bench(isLoopback = true) {
   locale.setLocale('zh')
   ctx.provide('locale', locale)
   let preference = 'system'
+  let outputTint = ''
   const namespace = () => ({
     ns: THEME_SETTINGS_NAMESPACE,
     schema: ThemeSettingsSchema.toJSON(),
-    value: { preference },
+    value: { preference, outputTint },
     applies: 'live' as const,
     secrets: [],
     revision: 0,
@@ -47,8 +48,10 @@ async function bench(isLoopback = true) {
       value: { writable: true, hasDocument: true, namespaces: [namespace()] },
     },
   }))
-  const mutate = vi.fn((request: { ops: { value: string }[] }) => {
-    preference = request.ops[0]!.value
+  const mutate = vi.fn((request: { ops: { path?: string[]; value: string }[] }) => {
+    const op = request.ops[0]!
+    if (op.path?.[0] === 'outputTint') outputTint = op.value
+    else preference = op.value
     return Promise.resolve({
       rpcId: 'theme-mutate' as never,
       result: { ok: true as const, value: namespace() },
@@ -124,6 +127,28 @@ describe('ui-theme apply', () => {
     expect(theme.getTheme().preference).toBe('system')
     expect(instance.getSnapshot().preference).toBe('system')
     await vi.waitFor(() => { expect(b.mutate).toHaveBeenCalledTimes(2) })
+  })
+
+  it('mirrors and routes the output-tint preference through the row face', async () => {
+    const b = await bench()
+    declareItems(b.slots)
+    await b.ctx.plugin({ inject: [...inject], apply }).await()
+    const theme = b.ctx.get('theme') as ThemeRuntime
+    theme.setOutputTint('#E7F5F8')
+    await vi.waitFor(() => { expect(b.mutate).toHaveBeenCalledWith(expect.objectContaining({
+      ops: [{ op: 'set', path: ['outputTint'], value: '#E7F5F8' }],
+    })) })
+
+    const { instance, face } = faceOf(b.slots)
+    // The inject-time re-sync carries the tint into the row store.
+    expect(instance.getSnapshot().outputTint).toBe('#E7F5F8')
+    face.setOutputTint('#F4F0FA')
+    expect(theme.getTheme().outputTint).toBe('#F4F0FA')
+    await vi.waitFor(() => { expect(b.mutate).toHaveBeenCalledWith(expect.objectContaining({
+      ops: [{ op: 'set', path: ['outputTint'], value: '#F4F0FA' }],
+    })) })
+    face.setOutputTint('')
+    expect(theme.getTheme().outputTint).toBe('')
   })
 
   it('loads Host settings at boot, refreshes its namespace, and keeps remote browsers process-local', async () => {

@@ -50,6 +50,32 @@ describe('tails', () => {
     expect(stopped.getByText('已停止')).toBeTruthy()
   })
 
+  it('AssistantMarkdown tints only text blocks, never the Think row or empty output', () => {
+    const tinted = (view: ReturnType<typeof render>): HTMLElement | undefined =>
+      [...view.container.querySelectorAll<HTMLElement>('div')]
+        .find(el => el.style.getPropertyValue('--dsh-output-tint') !== '')
+    const view = render(
+      <AssistantMarkdown
+        t={t}
+        blocks={[
+          { kind: 'reasoning', text: 'thinking hard\nsecond line' },
+          { kind: 'text', text: 'the answer' },
+        ]}
+        streaming={false}
+        outputTint="#E7F5F8"
+      />,
+    )
+    const card = tinted(view)
+    expect(card?.style.getPropertyValue('--dsh-output-tint')).toBe('#E7F5F8')
+    expect(card?.textContent).toContain('the answer')
+    expect(card?.textContent).not.toContain('thinking hard')
+    // The empty string keeps the tint off even when the prop is present.
+    const off = render(
+      <AssistantMarkdown t={t} blocks={[{ kind: 'text', text: 'plain' }]} streaming={false} outputTint="" />,
+    )
+    expect(tinted(off)).toBeUndefined()
+  })
+
   it('AssistantMarkdown skips the root shell when only tool-call heads remain', () => {
     // Tool heads are drawn by ChatView's tool groups; an empty root between
     // groups is layout noise (no text, no pulse, no interrupted marker).

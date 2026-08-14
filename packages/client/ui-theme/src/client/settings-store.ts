@@ -10,13 +10,15 @@ import type { ThemePreference } from '../theme-settings.ts'
 export interface AppearanceRowState {
   /** Persisted preference (selection state reads this, never the resolved active theme). */
   preference: ThemePreference
+  /** Persisted output-tint color; the empty string keeps the tint off. */
+  outputTint: string
   /** Service revision; -1 until first sync so revision 0 lands as a change. */
   revision: number
 }
 
 /** Declared action shape giving the exported factory a stable return type. */
 type AppearanceRowActions = {
-  sync: (draft: AppearanceRowState, preference: ThemePreference, revision: number) => void
+  sync: (draft: AppearanceRowState, preference: ThemePreference, outputTint: string, revision: number) => void
 }
 
 /**
@@ -25,11 +27,12 @@ type AppearanceRowActions = {
  */
 export function createAppearanceRowStore(): EngineStoreHandle<AppearanceRowState, AppearanceRowActions> {
   return defineStore({
-    init: (): AppearanceRowState => ({ preference: 'system', revision: -1 }),
+    init: (): AppearanceRowState => ({ preference: 'system', outputTint: '', revision: -1 }),
     actions: {
-      sync: (d, preference: ThemePreference, revision: number) => {
+      sync: (d, preference: ThemePreference, outputTint: string, revision: number) => {
         if (revision <= d.revision) return
         d.preference = preference
+        d.outputTint = outputTint
         d.revision = revision
       },
     },

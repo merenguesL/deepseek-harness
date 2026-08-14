@@ -30,6 +30,34 @@ describe('ThemeRuntime', () => {
     expect(snapshot.active.id).toBe('light')
     expect(snapshot.active.colorScheme).toBe('light')
     expect(snapshot.themes.map(t => t.id)).toEqual(['light', 'dark'])
+    expect(snapshot.outputTint).toBe('')
+  })
+
+  it('setOutputTint writes through the scope, republishes, and clears on empty', () => {
+    const { theme, events, host } = make()
+    theme.setOutputTint('#E7F5F8')
+    expect(theme.getTheme().outputTint).toBe('#E7F5F8')
+    expect(host.set).toHaveBeenCalledWith('outputTint', '#E7F5F8')
+    expect(events).toHaveLength(1)
+    // Same-value set is a no-op (no extra event).
+    theme.setOutputTint('#E7F5F8')
+    expect(events).toHaveLength(1)
+    expect(host.set).toHaveBeenCalledOnce()
+    theme.setOutputTint('')
+    expect(theme.getTheme().outputTint).toBe('')
+    expect(host.set).toHaveBeenCalledWith('outputTint', '')
+  })
+
+  it('adopts the durable tint from a published Host section without writing it back', () => {
+    const { theme, events, host } = make()
+    theme.setOutputTint('#E4F1FC')
+    host.publish({ status: 'ready', value: { preference: 'system', outputTint: '#F4F0FA' }, revision: 1, writable: true })
+    expect(theme.getTheme().outputTint).toBe('#F4F0FA')
+    expect(events).toHaveLength(2)
+    expect(host.set).toHaveBeenCalledOnce()
+    // An unchanged section republishes nothing.
+    host.publish({ value: { preference: 'system', outputTint: '#F4F0FA' }, revision: 2 })
+    expect(events).toHaveLength(2)
   })
 
   it('setTheme switches, writes through the scope, republishes, and keeps DOM untouched', () => {
@@ -50,17 +78,17 @@ describe('ThemeRuntime', () => {
 
   it('adopts a published Host section without writing it back', () => {
     const { theme, events, host } = make()
-    host.publish({ status: 'ready', value: { preference: 'dark' }, revision: 1, writable: true })
+    host.publish({ status: 'ready', value: { preference: 'dark', outputTint: '' }, revision: 1, writable: true })
     expect(theme.getTheme().preference).toBe('dark')
     expect(events).toHaveLength(1)
     expect(host.set).not.toHaveBeenCalled()
-    host.publish({ value: { preference: 'dark' }, revision: 2 })
+    host.publish({ value: { preference: 'dark', outputTint: '' }, revision: 2 })
     expect(events).toHaveLength(1)
   })
 
   it('adopts a section already standing at construction', () => {
     const host = stubSettingsScope<ThemeSettings>()
-    host.publish({ status: 'ready', value: { preference: 'dark' }, revision: 1, writable: true })
+    host.publish({ status: 'ready', value: { preference: 'dark', outputTint: '' }, revision: 1, writable: true })
     const { theme } = make(host)
     expect(theme.getTheme().preference).toBe('dark')
   })
