@@ -2,10 +2,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { stubSettingsScope, type StubSettingsScope } from '@deepseek-ai/dsh-client-test-runtime'
-import type {
-  ThemeSettings,
-  ThemeSnapshot,
-  ThemeTokenOverrides,
+import {
+  OUTPUT_TINT_COLOR,
+  type ThemeSettings,
+  type ThemeSnapshot,
+  type ThemeTokenOverrides,
 } from '@deepseek-ai/dsh-client-ui-theme/client'
 import { ThemeRuntime } from '@deepseek-ai/dsh-client-ui-theme/client'
 
@@ -48,16 +49,22 @@ describe('ThemeRuntime', () => {
     expect(host.set).toHaveBeenCalledWith('outputTint', '')
   })
 
-  it('adopts the durable tint from a published Host section without writing it back', () => {
+  it('adopts the durable tint, normalizing palette-era colors to the fixed product color', () => {
     const { theme, events, host } = make()
     theme.setOutputTint('#E4F1FC')
     host.publish({ status: 'ready', value: { preference: 'system', outputTint: '#F4F0FA' }, revision: 1, writable: true })
-    expect(theme.getTheme().outputTint).toBe('#F4F0FA')
+    // Any non-empty persisted value (residue of the removed palette) becomes
+    // the fixed color, keeping the tint on with the product default.
+    expect(theme.getTheme().outputTint).toBe(OUTPUT_TINT_COLOR)
     expect(events).toHaveLength(2)
     expect(host.set).toHaveBeenCalledOnce()
-    // An unchanged section republishes nothing.
-    host.publish({ value: { preference: 'system', outputTint: '#F4F0FA' }, revision: 2 })
+    // The fixed color itself adopts unchanged; an unchanged section republishes nothing.
+    host.publish({ value: { preference: 'system', outputTint: OUTPUT_TINT_COLOR }, revision: 2 })
     expect(events).toHaveLength(2)
+    // An empty section turns the tint off.
+    host.publish({ value: { preference: 'system', outputTint: '' }, revision: 3 })
+    expect(theme.getTheme().outputTint).toBe('')
+    expect(events).toHaveLength(3)
   })
 
   it('setTheme switches, writes through the scope, republishes, and keeps DOM untouched', () => {

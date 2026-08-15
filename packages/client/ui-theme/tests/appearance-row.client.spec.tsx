@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /** AppearanceRow behavior: three cubes, selection follows the persisted
- * preference, clicks drive setTheme; the output-tint switch and palette
- * drive setOutputTint. */
+ * preference, clicks drive setTheme; the output-tint switch drives
+ * setOutputTint. */
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { createSnapshotStore, type SessionListState, type WorkspaceListState } from '@deepseek-ai/dsh-client-runtime/client'
@@ -9,7 +9,7 @@ import { bindSnapshotSelector } from '@deepseek-ai/dsh-client-test-runtime'
 import { AppearanceRow } from '../src/client/AppearanceRow.tsx'
 import type { AppearanceRowComponentProps } from '../src/client/AppearanceRow.tsx'
 import { createAppearanceRowStore } from '../src/client/settings-store.ts'
-import type { ThemePreference } from '../src/client/index.ts'
+import { OUTPUT_TINT_COLOR, type ThemePreference } from '../src/theme-settings.ts'
 
 afterEach(cleanup)
 
@@ -21,8 +21,6 @@ const COPY: Record<string, string> = {
   'appearance.outputTint.title': 'Assistant output tint',
   'appearance.outputTint.description': 'Tint the assistant text output.',
   'appearance.outputTint.switch': 'Assistant output tint switch',
-  'appearance.outputTint.custom': 'Custom color',
-  'appearance.outputTint.swatch': 'Preset color {color}',
 }
 
 /** Empty global standard-kit hooks (the row reads neither). */
@@ -85,39 +83,15 @@ describe('AppearanceRow', () => {
     expect(pressed(/Dark/)).toBe('false')
   })
 
-  it('switch reflects the tint and drives setOutputTint (on restores the first preset)', () => {
+  it('switch reflects the tint and drives setOutputTint (on writes the fixed product color)', () => {
     const b = mount('system')
     expect(switchChecked()).toBe('false')
     fireEvent.click(screen.getByRole('switch'))
-    expect(b.setOutputTint).toHaveBeenCalledWith('#E7F5F8')
-    act(() => { b.store.actions.sync('system', '#E7F5F8', 1) })
+    expect(b.setOutputTint).toHaveBeenCalledWith(OUTPUT_TINT_COLOR)
+    act(() => { b.store.actions.sync('system', OUTPUT_TINT_COLOR, 1) })
     expect(switchChecked()).toBe('true')
     // Off clears the color.
     fireEvent.click(screen.getByRole('switch'))
     expect(b.setOutputTint).toHaveBeenCalledWith('')
-  })
-
-  it('palette swatch click picks that color; the selected swatch stays pressed', () => {
-    const b = mount('system')
-    const swatch = screen.getByRole('button', { name: 'Preset color #E4F1FC' })
-    fireEvent.click(swatch)
-    expect(b.setOutputTint).toHaveBeenCalledWith('#E4F1FC')
-    expect(swatch.getAttribute('aria-pressed')).toBe('false')
-    act(() => { b.store.actions.sync('system', '#E4F1FC', 1) })
-    expect(swatch.getAttribute('aria-pressed')).toBe('true')
-    // The switch turns the active tint off.
-    fireEvent.click(screen.getByRole('switch'))
-    expect(b.setOutputTint).toHaveBeenCalledWith('')
-  })
-
-  it('custom color input writes its value and shows the custom swatch selected', () => {
-    const b = mount('system')
-    const input = screen.getByLabelText('Custom color') as HTMLInputElement
-    fireEvent.change(input, { target: { value: '#aabbcc' } })
-    expect(b.setOutputTint).toHaveBeenCalledWith('#aabbcc')
-    act(() => { b.store.actions.sync('system', '#aabbcc', 1) })
-    // No preset matches: the custom swatch carries the pressed state.
-    expect(screen.getByRole('button', { name: 'Preset color #E7F5F8' }).getAttribute('aria-pressed')).toBe('false')
-    expect(input.value).toBe('#aabbcc')
   })
 })

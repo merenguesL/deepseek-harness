@@ -9,7 +9,7 @@ import { TestRemote } from '@deepseek-ai/dsh-client-test-runtime'
 import { apply as settingsApply, inject as settingsInject } from '@deepseek-ai/dsh-client-ui-settings/client'
 import { apply, inject, SETTINGS_NS } from '@deepseek-ai/dsh-client-ui-theme/client'
 import type { AppearanceRowInjected, ThemeRuntime } from '@deepseek-ai/dsh-client-ui-theme/client'
-import { THEME_SETTINGS_NAMESPACE, ThemeSettingsSchema } from '../src/theme-settings.ts'
+import { OUTPUT_TINT_COLOR, THEME_SETTINGS_NAMESPACE, ThemeSettingsSchema } from '../src/theme-settings.ts'
 import { AppearanceRow } from '../src/client/AppearanceRow.tsx'
 import type { createAppearanceRowStore } from '../src/client/settings-store.ts'
 
@@ -134,18 +134,18 @@ describe('ui-theme apply', () => {
     declareItems(b.slots)
     await b.ctx.plugin({ inject: [...inject], apply }).await()
     const theme = b.ctx.get('theme') as ThemeRuntime
-    theme.setOutputTint('#E7F5F8')
+    theme.setOutputTint(OUTPUT_TINT_COLOR)
     await vi.waitFor(() => { expect(b.mutate).toHaveBeenCalledWith(expect.objectContaining({
-      ops: [{ op: 'set', path: ['outputTint'], value: '#E7F5F8' }],
+      ops: [{ op: 'set', path: ['outputTint'], value: OUTPUT_TINT_COLOR }],
     })) })
 
     const { instance, face } = faceOf(b.slots)
     // The inject-time re-sync carries the tint into the row store.
-    expect(instance.getSnapshot().outputTint).toBe('#E7F5F8')
-    face.setOutputTint('#F4F0FA')
-    expect(theme.getTheme().outputTint).toBe('#F4F0FA')
+    expect(instance.getSnapshot().outputTint).toBe(OUTPUT_TINT_COLOR)
+    face.setOutputTint(OUTPUT_TINT_COLOR)
+    expect(theme.getTheme().outputTint).toBe(OUTPUT_TINT_COLOR)
     await vi.waitFor(() => { expect(b.mutate).toHaveBeenCalledWith(expect.objectContaining({
-      ops: [{ op: 'set', path: ['outputTint'], value: '#F4F0FA' }],
+      ops: [{ op: 'set', path: ['outputTint'], value: OUTPUT_TINT_COLOR }],
     })) })
     face.setOutputTint('')
     expect(theme.getTheme().outputTint).toBe('')

@@ -21,15 +21,15 @@ import { createAppearanceRowStore } from './settings-store.ts'
 import { installThemeStyles } from './styles.ts'
 import { en, zh, type ThemeKey } from './locales.ts'
 import {
-  DEFAULT_OUTPUT_TINT, DEFAULT_PREFERENCE, isThemePreference, OUTPUT_TINT_FIELD,
-  THEME_PREFERENCE_FIELD, THEME_SETTINGS_NAMESPACE,
+  DEFAULT_OUTPUT_TINT, DEFAULT_PREFERENCE, isThemePreference, OUTPUT_TINT_COLOR,
+  OUTPUT_TINT_FIELD, THEME_PREFERENCE_FIELD, THEME_SETTINGS_NAMESPACE,
   type ThemePreference, type ThemeSettings,
 } from '../theme-settings.ts'
 
 export type { AppearanceRowComponentProps, AppearanceRowInjected } from './AppearanceRow.tsx'
 export type { AppearanceRowState } from './settings-store.ts'
 export type { ThemeKey } from './locales.ts'
-export type { ThemePreference, ThemeSettings } from '../theme-settings.ts'
+export { OUTPUT_TINT_COLOR, type ThemePreference, type ThemeSettings } from '../theme-settings.ts'
 
 /** Namespace owning this feature's settings-row copy. */
 export const SETTINGS_NS = 'settings.theme'
@@ -261,8 +261,11 @@ export class ThemeRuntime {
       changed = true
     }
     // The settings wire always delivers the schema-defaulted outputTint.
-    if (this.outputTint !== section.outputTint) {
-      this.outputTint = section.outputTint
+    // Palette-era values normalize to the single product color, keeping the
+    // tint on with the fixed color instead of dropping the user's choice.
+    const tint = section.outputTint === '' ? '' : OUTPUT_TINT_COLOR
+    if (this.outputTint !== tint) {
+      this.outputTint = tint
       changed = true
     }
     if (changed) this.publish()

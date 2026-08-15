@@ -4,6 +4,8 @@ Status: implemented
 
 [English](2026-08-14-assistant-output-tint-appearance.md) | 中文
 
+> 调色盘决策已被[单一固定颜色决策](../simplification/2026-08-15-output-tint-single-fixed-color.md)取代：外观行现在只有一个开关加产品固定颜色。
+
 ## 问题
 
 模型回复的文字输出、思考披露与工具调用行都停留在同一块朴素表面上，长回答难以与周围的消息流区分。产品要求给模型回复输出（不含思考与工具调用）加上克制的浅青色背景，由「设置 → 通用 → 外观」下的开关控制，并允许用户自行挑选颜色（调色盘）。

@@ -2,5 +2,5 @@
 # side as of the last confirmed-consistent state. Both languages carry equal authority;
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/feature/2026-08-14-assistant-output-tint-appearance.md
-2026-08-14-assistant-output-tint-appearance.md: ce4be83e16f2db12761599484313ee6214e830f1
-2026-08-14-assistant-output-tint-appearance.zh.md: a16901a7299756a778581348a833f2b4754e57fd
+2026-08-14-assistant-output-tint-appearance.md: 8e2341d4877d54491c4fe7aa5e8ac6698adba896
+2026-08-14-assistant-output-tint-appearance.zh.md: d77d3204d1972c5d6ecbe8935eef245e41a15ec8

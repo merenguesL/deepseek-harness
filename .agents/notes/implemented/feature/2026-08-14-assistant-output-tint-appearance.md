@@ -4,6 +4,8 @@ Status: implemented
 
 English | [中文](2026-08-14-assistant-output-tint-appearance.zh.md)
 
+> The palette decision is superseded by [the single fixed-color tint](../simplification/2026-08-15-output-tint-single-fixed-color.md): the Appearance row now offers a switch with one product-fixed color.
+
 ## Problem
 
 The assistant text output, thinking disclosure, and tool-call rows all sit on the same plain surface, so a long answer is hard to separate from the surrounding flow. The product asked for a restrained light-cyan background on the model reply output (not on thinking or tool calls), controlled by a switch under Settings → General → Appearance, with the freedom to pick the color oneself (调色盘).
