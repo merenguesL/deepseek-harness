@@ -380,6 +380,10 @@ export class JsonlSessionPersistence extends SessionPersistence implements Persi
       signal?.throwIfAborted()
       const complete = scanner.checkpoint()
       if (complete.committedBytes !== complete.inputBytes) {
+        // A committed-region defect (unparsable row or seq collision) is the
+        // real corruption; only a clean scan can mean the final record itself
+        // is torn inside an otherwise complete frame.
+        if (scanner.problem !== undefined) throw scanner.problem
         throw new Error('corrupt Zstandard session log: complete frame contains a torn JSONL record')
       }
       if (tornStart === undefined) {

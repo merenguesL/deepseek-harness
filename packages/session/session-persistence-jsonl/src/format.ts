@@ -281,6 +281,15 @@ export class SessionLogScanner {
   private finished = false
 
   /**
+   * The first committed-region defect (unparsable row or seq gap), when the
+   * scan is not clean; `undefined` for a clean scan or one whose only problem
+   * is an incomplete final record.
+   */
+  get problem(): Error | undefined {
+    return this.issue
+  }
+
+  /**
    * Create an event scanner from exactly one newline-terminated header record.
    * @param headerRecord - the complete first JSONL record, including its newline.
    */

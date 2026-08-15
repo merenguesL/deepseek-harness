@@ -617,6 +617,34 @@ describe('JsonlSessionPersistence: default Zstandard encoding', () => {
     await expect(ctx.sessionPersistence.load(header.id)).rejects.toThrow(/complete frame contains a torn JSONL record/)
   })
 
+  it('reports the committed seq gap when a complete frame repeats a committed seq', async () => {
+    const root = await freshRoot()
+    const ctx = await mount(root)
+    const header = meta('complete-seq-collision')
+    await ctx.sessionPersistence.create(header)
+    await ctx.sessionPersistence.append(header.id, oneTurnLog())
+    const [committed] = oneTurnLog()
+    const duplicate = { ...committed!, seq: committed!.seq + 5 }
+    await appendFile(
+      logPath(root, header.cwd, header.id, 'zstd'),
+      await compressZstdFrame(JSON.stringify(duplicate) + '\n'),
+    )
+    await expect(ctx.sessionPersistence.load(header.id)).rejects.toThrow(/seq gap in committed region/)
+  })
+
+  it('reports an unparsable committed row inside a complete frame', async () => {
+    const root = await freshRoot()
+    const ctx = await mount(root)
+    const header = meta('complete-bad-row')
+    await ctx.sessionPersistence.create(header)
+    await ctx.sessionPersistence.append(header.id, oneTurnLog())
+    await appendFile(
+      logPath(root, header.cwd, header.id, 'zstd'),
+      await compressZstdFrame('{"type":"assistant/chunk","seq":99,"time":1,"data":garbage}\n'),
+    )
+    await expect(ctx.sessionPersistence.load(header.id)).rejects.toThrow(/unparsable committed event/)
+  })
+
   it('rolls back a checksummed append frame when fsync fails', async () => {
     const root = await freshRoot()
     const ctx = await mount(root)
