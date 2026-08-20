@@ -1,0 +1,3 @@
+name: 极简模式（RTK）
+description: 基于极简模式的双工具编码 Agent，POSIX bash 命令输出经 rtk 压缩，以节省上下文 token。
+order: 5
