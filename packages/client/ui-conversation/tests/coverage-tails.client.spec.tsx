@@ -62,6 +62,7 @@ describe('tails', () => {
           { kind: 'text', text: 'the answer' },
         ]}
         streaming={false}
+        renderMessageImages={renderMessageImages}
         outputTint="#E7F5F8"
       />,
     )
@@ -71,7 +72,13 @@ describe('tails', () => {
     expect(card?.textContent).not.toContain('thinking hard')
     // The empty string keeps the tint off even when the prop is present.
     const off = render(
-      <AssistantMarkdown t={t} blocks={[{ kind: 'text', text: 'plain' }]} streaming={false} outputTint="" />,
+      <AssistantMarkdown
+        t={t}
+        blocks={[{ kind: 'text', text: 'plain' }]}
+        streaming={false}
+        renderMessageImages={renderMessageImages}
+        outputTint=""
+      />,
     )
     expect(tinted(off)).toBeUndefined()
   })
