@@ -18,6 +18,8 @@ export interface UsageTotals extends UsageTokenBuckets {
   /** Lower bound: one when a session has usage, because session.list has no call count. */
   calls: number
   sessions: number
+  /** Sessions whose session.list row carried a `tokenUsage` projection value. */
+  measuredSessions: number
   turns: number
   steps: number
   llmMs: number
@@ -39,6 +41,10 @@ export interface UsageSessionRow extends UsageTokenBuckets {
   cwd?: string
   createdAt: number
   updatedAt: number
+  /** Whether the session.list row carried a `tokenUsage` projection value. */
+  measured: boolean
+  /** Projection recency marker: the list cache watermark seq, null without a projection. */
+  asOfSeq: number | null
   totalTokens: number
   cacheRate: number
   calls: number

@@ -2,13 +2,37 @@
 /** Usage dashboard behavior: loading, error, empty, and ready states; hover
  *  tooltips on the single bars and trend chart; the day/week/month toggle;
  *  the heatmap; and the workspace/session breakdown tabs. */
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
-import { afterEach, describe, expect, it } from 'vitest'
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { bindSnapshotSelector } from '@deepseek-ai/dsh-client-test-runtime'
-import type { UsageDescribeValue, UsageDayBucket, UsageHeatmap, UsageResponse, UsageSessionRow, UsageWorkspaceRow } from '../src/client/report-types.ts'
-import type { SessionId } from '@deepseek-ai/dsh-session/types'
-import { UsageSection } from '../src/client/UsageSection.tsx'
-import { CacheRateBar, CompositionBar, SeriesChart } from '../src/client/charts.tsx'
+import type {
+  UsageDescribeValue,
+  UsageDayBucket,
+  UsageHeatmap,
+  UsageResponse,
+  UsageSessionRow,
+  UsageWorkspaceRow,
+} from '../src/client/report-types.ts'
+/** The branded session id as declared by the row contract. */
+type SessionId = UsageSessionRow['sessionId']
+import {
+  UsageSection,
+  composeReportText,
+} from '../src/client/UsageSection.tsx'
+import {
+  CacheRateBar,
+  CompositionBar,
+  SeriesChart,
+} from '../src/client/charts.tsx'
+import { Heatmap } from '../src/client/heatmap.tsx'
 import type { UsageSectionInjected } from '../src/client/UsageSection.tsx'
 import { UsageStore } from '../src/client/store.ts'
 import { zh } from '../src/client/locales.ts'
@@ -25,62 +49,148 @@ function day(key: string, total: number, calls = 1): UsageDayBucket {
   const cacheRead = Math.round(total * 0.6)
   const cacheWrite = total - input - output - cacheRead
   return {
-    day: key, uncachedInputTokens: input, outputTokens: output, cacheReadTokens: cacheRead,
-    cacheWriteTokens: cacheWrite, totalTokens: total, calls,
+    day: key,
+    uncachedInputTokens: input,
+    outputTokens: output,
+    cacheReadTokens: cacheRead,
+    cacheWriteTokens: cacheWrite,
+    totalTokens: total,
+    calls,
   }
 }
 
 const DAY_KEYS = [
-  '2026-07-01', '2026-07-02', '2026-07-03', '2026-07-04', '2026-07-05', '2026-07-06', '2026-07-07',
-  '2026-07-08', '2026-07-09', '2026-07-10', '2026-07-11', '2026-07-12', '2026-07-13', '2026-07-14',
+  '2026-07-01',
+  '2026-07-02',
+  '2026-07-03',
+  '2026-07-04',
+  '2026-07-05',
+  '2026-07-06',
+  '2026-07-07',
+  '2026-07-08',
+  '2026-07-09',
+  '2026-07-10',
+  '2026-07-11',
+  '2026-07-12',
+  '2026-07-13',
+  '2026-07-14',
 ]
 
 function sessionRow(overrides: Partial<UsageSessionRow> = {}): UsageSessionRow {
   return {
-    sessionId: sid('s1'), title: '会话一', createdAt: 1, updatedAt: Date.now(),
-    uncachedInputTokens: 100, outputTokens: 50, cacheReadTokens: 300, cacheWriteTokens: 20,
-    totalTokens: 470, cacheRate: 0.7142857, calls: 12, turns: 5, steps: 9,
+    sessionId: sid('s1'),
+    title: '会话一',
+    createdAt: 1,
+    updatedAt: Date.now(),
+    uncachedInputTokens: 100,
+    outputTokens: 50,
+    cacheReadTokens: 300,
+    cacheWriteTokens: 20,
+    totalTokens: 470,
+    cacheRate: 0.7142857,
+    calls: 12,
+    turns: 5,
+    steps: 9,
+    measured: true,
+    asOfSeq: 5,
     ...overrides,
   }
 }
 
-function workspaceRow(overrides: Partial<UsageWorkspaceRow>): UsageWorkspaceRow {
+function workspaceRow(
+  overrides: Partial<UsageWorkspaceRow>,
+): UsageWorkspaceRow {
   return {
-    path: '/tmp/fixture', sessions: 2,
-    uncachedInputTokens: 140, outputTokens: 70, cacheReadTokens: 420, cacheWriteTokens: 30,
-    totalTokens: 660, cacheRate: 0.7118644, calls: 17, turns: 7, steps: 12,
+    path: '/tmp/fixture',
+    sessions: 2,
+    uncachedInputTokens: 140,
+    outputTokens: 70,
+    cacheReadTokens: 420,
+    cacheWriteTokens: 30,
+    totalTokens: 660,
+    cacheRate: 0.7118644,
+    calls: 17,
+    turns: 7,
+    steps: 12,
     ...overrides,
   }
 }
 
 function heatmap(): UsageHeatmap {
   return Array.from({ length: 24 }, (_, hour) =>
-    Array.from({ length: 7 }, () => (hour >= 9 && hour <= 11 ? 30_000 : 0)))
+    Array.from({ length: 7 }, () => (hour >= 9 && hour <= 11 ? 30_000 : 0)),
+  )
 }
 
-function report(overrides: Partial<UsageDescribeValue> = {}): UsageDescribeValue {
+function report(
+  overrides: Partial<UsageDescribeValue> = {},
+): UsageDescribeValue {
   const series = DAY_KEYS.map((key, index) => day(key, 1_000 + index * 100))
   const now = Date.now()
   return {
     totals: {
-      uncachedInputTokens: 20_000, outputTokens: 10_000, cacheReadTokens: 60_000,
-      cacheWriteTokens: 5_000, totalTokens: 95_000, promptTokens: 85_000,
-      cacheRate: 60_000 / 85_000, calls: 300, sessions: 2, turns: 40, steps: 70,
-      llmMs: 1_000_000, firstActivityAt: 1, lastActivityAt: 2,
+      uncachedInputTokens: 20_000,
+      outputTokens: 10_000,
+      cacheReadTokens: 60_000,
+      cacheWriteTokens: 5_000,
+      totalTokens: 95_000,
+      promptTokens: 85_000,
+      cacheRate: 60_000 / 85_000,
+      calls: 300,
+      sessions: 2,
+      measuredSessions: 2,
+      turns: 40,
+      steps: 70,
+      llmMs: 1_000_000,
+      firstActivityAt: 1,
+      lastActivityAt: 2,
     },
     series,
     bySession: [
-      sessionRow({ sessionId: sid('alpha'), title: 'Alpha', cwd: '/tmp/fixture' }),
+      sessionRow({
+        sessionId: sid('alpha'),
+        title: 'Alpha',
+        cwd: '/tmp/fixture',
+      }),
       sessionRow({ sessionId: sid('beta'), title: null, cwd: '/tmp/fixture' }),
       // A zero-token session, one without a cwd, and old recency buckets.
-      sessionRow({ sessionId: sid('empty'), cwd: '/tmp/fixture', totalTokens: 0, cacheRate: 0, uncachedInputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, calls: 0, updatedAt: now - 3_600_000 }),
-      sessionRow({ sessionId: sid('old'), cacheWriteTokens: 0, updatedAt: now - 2 * 86_400_000 }),
-      sessionRow({ sessionId: sid('ancient'), cwd: '/tmp/fixture', updatedAt: now - 40 * 86_400_000 }),
+      sessionRow({
+        sessionId: sid('empty'),
+        cwd: '/tmp/fixture',
+        totalTokens: 0,
+        cacheRate: 0,
+        uncachedInputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        calls: 0,
+        updatedAt: now - 3_600_000,
+      }),
+      sessionRow({
+        sessionId: sid('old'),
+        cacheWriteTokens: 0,
+        updatedAt: now - 2 * 86_400_000,
+      }),
+      sessionRow({
+        sessionId: sid('ancient'),
+        cwd: '/tmp/fixture',
+        updatedAt: now - 40 * 86_400_000,
+      }),
     ],
     byWorkspace: [
       workspaceRow({}),
       workspaceRow({ path: '', sessions: 1 }),
-      workspaceRow({ path: '/', sessions: 1, totalTokens: 0, cacheRate: 0, uncachedInputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, calls: 0 }),
+      workspaceRow({
+        path: '/',
+        sessions: 1,
+        totalTokens: 0,
+        cacheRate: 0,
+        uncachedInputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        calls: 0,
+      }),
     ],
     heatmap: heatmap(),
     generatedAt: Date.parse('2026-07-14T12:00:00Z'),
@@ -99,17 +209,33 @@ function apiWith(value: UsageDescribeValue | (() => Promise<never>)) {
 
 async function mountReady(overrides: Partial<UsageDescribeValue> = {}) {
   const store = new UsageStore(apiWith(report(overrides)))
-  render(<UsageSection controller={store} useSnapshot={bindSnapshotSelector(store.store)} t={t} />)
-  await waitFor(() => {expect(screen.getByText(zh.title)).toBeTruthy()})
+  render(
+    <UsageSection
+      controller={store}
+      useSnapshot={bindSnapshotSelector(store.store)}
+      t={t}
+    />,
+  )
+  await waitFor(() => {
+    expect(screen.getByText(zh.title)).toBeTruthy()
+  })
   return store
 }
 
 describe('UsageSection states', () => {
   it('shows the loading state until the first report lands', async () => {
     const store = new UsageStore(apiWith(report()))
-    render(<UsageSection controller={store} useSnapshot={bindSnapshotSelector(store.store)} t={t} />)
+    render(
+      <UsageSection
+        controller={store}
+        useSnapshot={bindSnapshotSelector(store.store)}
+        t={t}
+      />,
+    )
     expect(screen.getByText(zh.loading)).toBeTruthy()
-    await waitFor(() => {expect(screen.getByText(zh.title)).toBeTruthy()})
+    await waitFor(() => {
+      expect(screen.getByText(zh.title)).toBeTruthy()
+    })
   })
 
   it('shows the failure state with a working retry', async () => {
@@ -120,24 +246,53 @@ describe('UsageSection states', () => {
         return { result: { ok: true, value: report() } }
       },
     })
-    render(<UsageSection controller={store} useSnapshot={bindSnapshotSelector(store.store)} t={t} />)
-    await waitFor(() => {expect(screen.getByText(new RegExp(zh.loadFailed))).toBeTruthy()})
+    render(
+      <UsageSection
+        controller={store}
+        useSnapshot={bindSnapshotSelector(store.store)}
+        t={t}
+      />,
+    )
+    await waitFor(() => {
+      expect(screen.getByText(new RegExp(zh.loadFailed))).toBeTruthy()
+    })
     fail = false
     fireEvent.click(screen.getByText(zh.retry))
-    await waitFor(() => {expect(screen.getByText(zh.title)).toBeTruthy()})
+    await waitFor(() => {
+      expect(screen.getByText(zh.title)).toBeTruthy()
+    })
   })
 
   it('shows the empty state for a report without usage', async () => {
-    const store = new UsageStore(apiWith(report({
-      totals: { ...report().totals, totalTokens: 0, cacheRate: 0, promptTokens: 0 },
-    })))
-    render(<UsageSection controller={store} useSnapshot={bindSnapshotSelector(store.store)} t={t} />)
-    await waitFor(() => {expect(screen.getByText(zh.emptyTitle)).toBeTruthy()})
+    const store = new UsageStore(
+      apiWith(
+        report({
+          totals: {
+            ...report().totals,
+            totalTokens: 0,
+            cacheRate: 0,
+            promptTokens: 0,
+          },
+        }),
+      ),
+    )
+    render(
+      <UsageSection
+        controller={store}
+        useSnapshot={bindSnapshotSelector(store.store)}
+        t={t}
+      />,
+    )
+    await waitFor(() => {
+      expect(screen.getByText(zh.emptyTitle)).toBeTruthy()
+    })
     expect(screen.getByText(zh.emptyBody)).toBeTruthy()
     const refreshButtons = screen.getAllByRole('button', { name: zh.refresh })
     const refreshTarget = refreshButtons[1] ?? refreshButtons[0]
     if (refreshTarget !== undefined) fireEvent.click(refreshTarget)
-    await waitFor(() => {expect(screen.getByText(zh.emptyTitle)).toBeTruthy()})
+    await waitFor(() => {
+      expect(screen.getByText(zh.emptyTitle)).toBeTruthy()
+    })
   })
 
   it('keeps stale data visible with a warning when a refresh fails', async () => {
@@ -148,11 +303,21 @@ describe('UsageSection states', () => {
         return { result: { ok: true, value: report() } }
       },
     })
-    render(<UsageSection controller={store} useSnapshot={bindSnapshotSelector(store.store)} t={t} />)
-    await waitFor(() => {expect(screen.getByText(zh.title)).toBeTruthy()})
+    render(
+      <UsageSection
+        controller={store}
+        useSnapshot={bindSnapshotSelector(store.store)}
+        t={t}
+      />,
+    )
+    await waitFor(() => {
+      expect(screen.getByText(zh.title)).toBeTruthy()
+    })
     fail = true
     fireEvent.click(screen.getByLabelText(zh.refresh))
-    await waitFor(() => {expect(screen.getByText(new RegExp(zh.loadFailed))).toBeTruthy()})
+    await waitFor(() => {
+      expect(screen.getByText(new RegExp(zh.loadFailed))).toBeTruthy()
+    })
     // The dashboard is still there underneath the warning.
     expect(screen.getByText(zh.totalTokens)).toBeTruthy()
   })
@@ -171,8 +336,8 @@ describe('UsageSection dashboard', () => {
     expect(screen.getByText(zh.cacheRate)).toBeTruthy()
     expect(screen.getAllByText('70.6%').length).toBeGreaterThan(0)
     expect(screen.getByText('300')).toBeTruthy()
-    expect(screen.getByText(zh.turns + ': 40')).toBeTruthy()
-    expect(screen.getByText(zh.steps + ': 70')).toBeTruthy()
+    expect(screen.getByText(`${zh.turns}: 40`)).toBeTruthy()
+    expect(screen.getByText(`${zh.steps}: 70`)).toBeTruthy()
   })
 
   it('refreshes on demand and updates the freshness stamp', async () => {
@@ -180,14 +345,29 @@ describe('UsageSection dashboard', () => {
     const store = new UsageStore({
       describe: async (): Promise<UsageResponse> => {
         calls += 1
-        return { result: { ok: true, value: report({ generatedAt: Date.parse('2026-07-14T13:00:00Z') }) } }
+        return {
+          result: {
+            ok: true,
+            value: report({ generatedAt: Date.parse('2026-07-14T13:00:00Z') }),
+          },
+        }
       },
     })
-    render(<UsageSection controller={store} useSnapshot={bindSnapshotSelector(store.store)} t={t} />)
-    await waitFor(() => {expect(screen.getByText(zh.title)).toBeTruthy()})
+    render(
+      <UsageSection
+        controller={store}
+        useSnapshot={bindSnapshotSelector(store.store)}
+        t={t}
+      />,
+    )
+    await waitFor(() => {
+      expect(screen.getByText(zh.title)).toBeTruthy()
+    })
     expect(calls).toBe(1)
     fireEvent.click(screen.getByLabelText(zh.refresh))
-    await waitFor(() => {expect(calls).toBe(2)})
+    await waitFor(() => {
+      expect(calls).toBe(2)
+    })
   })
 
   it('reveals exact segment numbers when hovering the composition bar', async () => {
@@ -202,7 +382,10 @@ describe('UsageSection dashboard', () => {
 
   it('reveals exact figures when hovering the composition segment div', async () => {
     await mountReady()
-    const segmentDiv = screen.getByText(zh.inputTokensFull).closest('div')!.parentElement!.querySelector('[class*="segment"]')!
+    const segmentDiv = screen
+      .getByText(zh.inputTokensFull)
+      .closest('div')!
+      .parentElement!.querySelector('[class*="segment"]')!
     fireEvent.mouseEnter(segmentDiv)
     expect(screen.getByRole('tooltip')).toBeTruthy()
     fireEvent.mouseLeave(segmentDiv)
@@ -211,7 +394,10 @@ describe('UsageSection dashboard', () => {
 
   it('reveals exact figures when hovering the cache-rate bar', async () => {
     await mountReady()
-    const bar = screen.getByText(zh.cacheRateBar).closest('section')!.querySelector('[class*="bar"]')!
+    const bar = screen
+      .getByText(zh.cacheRateBar)
+      .closest('section')!
+      .querySelector('[class*="bar"]')!
     fireEvent.mouseEnter(bar)
     const tooltip = screen.getByRole('tooltip')
     expect(within(tooltip).getByText(/60,000/)).toBeTruthy()
@@ -222,11 +408,23 @@ describe('UsageSection dashboard', () => {
 
   it('switches the trend granularity and shows the delta chip', async () => {
     await mountReady()
-    expect(screen.getByRole('tab', { name: zh.granularityDay }).getAttribute('aria-selected')).toBe('true')
+    expect(
+      screen
+        .getByRole('tab', { name: zh.granularityDay })
+        .getAttribute('aria-selected'),
+    ).toBe('true')
     fireEvent.click(screen.getByRole('tab', { name: zh.granularityWeek }))
-    expect(screen.getByRole('tab', { name: zh.granularityWeek }).getAttribute('aria-selected')).toBe('true')
+    expect(
+      screen
+        .getByRole('tab', { name: zh.granularityWeek })
+        .getAttribute('aria-selected'),
+    ).toBe('true')
     fireEvent.click(screen.getByRole('tab', { name: zh.granularityMonth }))
-    expect(screen.getByRole('tab', { name: zh.granularityMonth }).getAttribute('aria-selected')).toBe('true')
+    expect(
+      screen
+        .getByRole('tab', { name: zh.granularityMonth })
+        .getAttribute('aria-selected'),
+    ).toBe('true')
     // 14 daily buckets roll into two calendar weeks; a full day window
     // exists, so the delta chip shows for the day granularity.
     fireEvent.click(screen.getByRole('tab', { name: zh.granularityDay }))
@@ -234,9 +432,13 @@ describe('UsageSection dashboard', () => {
   })
 
   it('shows falling and flat period deltas', () => {
-    const falling = DAY_KEYS.map((key, index) => day(key, 10_000 - index * 500))
+    const falling = DAY_KEYS.map((key, index) =>
+      day(key, 10_000 - index * 500),
+    )
     const { unmount } = render(<SeriesChart series={falling} t={t} />)
-    expect(screen.getByText(content => content.startsWith('\u2193'))).toBeTruthy()
+    expect(
+      screen.getByText(content => content.startsWith('\u2193')),
+    ).toBeTruthy()
     unmount()
     const flat = DAY_KEYS.map(key => day(key, 10_000))
     render(<SeriesChart series={flat} t={t} />)
@@ -246,18 +448,34 @@ describe('UsageSection dashboard', () => {
   it('renders a chart with all-zero buckets and zero-prompt bars directly', () => {
     render(<SeriesChart series={[day('2026-07-01', 0)]} t={t} />)
     expect(screen.getByText(zh.peak)).toBeTruthy()
-    render(<CompositionBar
-      buckets={{ uncachedInputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }}
-      total={0}
-      t={t}
-    />)
-    render(<CacheRateBar uncachedInputTokens={0} cacheReadTokens={0} cacheWriteTokens={0} t={t} />)
+    render(
+      <CompositionBar
+        buckets={{
+          uncachedInputTokens: 0,
+          outputTokens: 0,
+          cacheReadTokens: 0,
+          cacheWriteTokens: 0,
+        }}
+        total={0}
+        t={t}
+      />,
+    )
+    render(
+      <CacheRateBar
+        uncachedInputTokens={0}
+        cacheReadTokens={0}
+        cacheWriteTokens={0}
+        t={t}
+      />,
+    )
     expect(screen.queryByRole('tooltip')).toBeNull()
   })
 
   it('shows the hover tooltip over a trend bar', async () => {
     await mountReady()
-    const svg = document.querySelector('[role="img"][aria-label="' + zh.trend + '"]')!
+    const svg = document.querySelector(
+      `[role="img"][aria-label="${zh.trend}"]`,
+    )!
     // The transparent overlay rect per bucket is the hover target; the first
     // one belongs to the first (leftmost) day.
     const overlay = svg.querySelector('rect[fill="transparent"]')!
@@ -270,21 +488,35 @@ describe('UsageSection dashboard', () => {
   it('shows the heatmap with tooltip and the empty heatmap hint', async () => {
     await mountReady()
     expect(screen.getByText(zh.heatmapHigh)).toBeTruthy()
-    const cell = screen.getAllByRole('button', { hidden: false }).find(button => button.className.includes('cellHot'))!
+    const cell = screen
+      .getAllByRole('button', { hidden: false })
+      .find(button => button.className.includes('cellHot'))!
     fireEvent.mouseEnter(cell)
-    await waitFor(() => {expect(screen.getAllByText(/30,000/).length).toBeGreaterThan(0)})
+    await waitFor(() => {
+      expect(screen.getAllByText(/30,000/).length).toBeGreaterThan(0)
+    })
     fireEvent.mouseLeave(cell)
-    await waitFor(() => {expect(screen.queryByRole('tooltip')).toBeNull()})
+    await waitFor(() => {
+      expect(screen.queryByRole('tooltip')).toBeNull()
+    })
     // Hovering an empty cell shows nothing (scoped to the heatmap grid so
     // the toolbar's own buttons stay out of the search).
     const grid = document.querySelector('[class*="heatmapGrid"]')!
-    const cold = Array.from(grid.querySelectorAll('button')).find(button => !button.className.includes('cellHot'))!
+    const cold = Array.from(grid.querySelectorAll('button')).find(
+      button => !button.className.includes('cellHot'),
+    )!
     fireEvent.mouseEnter(cold)
-    await waitFor(() => {expect(screen.queryByRole('tooltip')).toBeNull()})
+    await waitFor(() => {
+      expect(screen.queryByRole('tooltip')).toBeNull()
+    })
   })
 
   it('shows the empty heatmap hint when no cell has usage', async () => {
-    await mountReady({ heatmap: Array.from({ length: 24 }, () => Array.from({ length: 7 }, () => 0)) })
+    await mountReady({
+      heatmap: Array.from({ length: 24 }, () =>
+        Array.from({ length: 7 }, () => 0),
+      ),
+    })
     expect(screen.getByText(zh.heatmapEmpty)).toBeTruthy()
   })
 
@@ -292,7 +524,7 @@ describe('UsageSection dashboard', () => {
     await mountReady()
     expect(screen.getByText('fixture')).toBeTruthy()
     expect(screen.getByText(zh.unknownWorkspace)).toBeTruthy()
-    expect(screen.getByText(new RegExp(zh.sessions + ': 2'))).toBeTruthy()
+    expect(screen.getByText(new RegExp(`${zh.sessions}: 2`))).toBeTruthy()
     fireEvent.click(screen.getByRole('tab', { name: zh.bySession }))
     expect(screen.getByText('Alpha')).toBeTruthy()
     expect(screen.getByText(zh.untitledSession)).toBeTruthy()
@@ -305,30 +537,215 @@ describe('UsageSection dashboard', () => {
     expect(screen.getByText(zh.noSessions)).toBeTruthy()
   })
 
-  it('omits the composition and cache-rate bars when there is no prompt traffic', async () => {
-    await mountReady({
-      totals: {
-        ...report().totals, totalTokens: 0, cacheRate: 0, promptTokens: 0,
-        cacheReadTokens: 0, uncachedInputTokens: 0, cacheWriteTokens: 0,
+  it('shows the coverage note only when some sessions lack a projection', async () => {
+    await mountReady({ totals: { ...report().totals, measuredSessions: 1 } })
+    expect(screen.getByText(zh.coverageNote.replace('{n}', '1'))).toBeTruthy()
+  })
+
+  it('omits the coverage note when every session is measured', async () => {
+    await mountReady()
+    expect(screen.queryByText(zh.coverageNote.replace('{n}', '0'))).toBeNull()
+    expect(screen.queryByText(zh.coverageNote.replace('{n}', '2'))).toBeNull()
+  })
+
+  it('filters the trend by trailing range and sums the visible series', () => {
+    const now = Date.now()
+    const recent = Array.from({ length: 14 }, (_, index) => {
+      const date = new Date(now - (13 - index) * 86_400_000)
+      const pad = (value: number): string => String(value).padStart(2, '0')
+      return day(
+        `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`,
+        1_000,
+        2,
+      )
+    })
+    render(<SeriesChart series={recent} t={t} />)
+    const radios = screen.getAllByRole('radio')
+    expect(radios).toHaveLength(4)
+    fireEvent.click(
+      screen.getByRole('radio', { name: zh.rangeDays.replace('{days}', '7') }),
+    )
+    expect(
+      screen
+        .getByRole('radio', { name: zh.rangeDays.replace('{days}', '7') })
+        .getAttribute('aria-checked'),
+    ).toBe('true')
+    expect(
+      screen.getByText(
+        new RegExp(
+          zh.rangeSummary
+            .replace('{days}', '7')
+            .replace('{tokens}', '7,000')
+            .replace('{calls}', '14')
+            .replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
+        ),
+      ),
+    ).toBeTruthy()
+    fireEvent.click(screen.getByRole('radio', { name: zh.rangeAll }))
+    expect(screen.queryByText(zh.rangeSummary.slice(0, 10))).toBeNull()
+    fireEvent.click(
+      screen.getByRole('radio', { name: zh.rangeDays.replace('{days}', '30') }),
+    )
+    expect(
+      screen.getByText(
+        new RegExp(
+          zh.rangeSummary
+            .replace('{days}', '30')
+            .replace('{tokens}', '14,000')
+            .replace('{calls}', '28')
+            .replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
+        ),
+      ),
+    ).toBeTruthy()
+    fireEvent.click(
+      screen.getByRole('radio', { name: zh.rangeDays.replace('{days}', '90') }),
+    )
+    expect(
+      screen
+        .getByRole('radio', { name: zh.rangeDays.replace('{days}', '90') })
+        .getAttribute('aria-checked'),
+    ).toBe('true')
+  })
+
+  it('copies the plain-text report and shows transient feedback', async () => {
+    const writes: string[] = []
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: async (text: string): Promise<void> => {
+          writes.push(text)
+        },
       },
     })
-    expect(screen.queryByText(zh.composition)).toBeNull()
-    expect(screen.queryByText(zh.cacheRateBar)).toBeNull()
+    await mountReady()
+    vi.useFakeTimers()
+    fireEvent.click(screen.getByLabelText(zh.copyReport))
+    await act(async () => {})
+    expect(screen.getByText(zh.copied)).toBeTruthy()
+    act(() => {
+      vi.advanceTimersByTime(2000)
+    })
+    expect(screen.queryByText(zh.copied)).toBeNull()
+    expect(screen.getByLabelText(zh.copyReport)).toBeTruthy()
+    vi.useRealTimers()
+    expect(writes[0]?.startsWith(zh.title)).toBe(true)
+    expect(writes[0]).toContain('95,000')
+    expect(writes[0]).toContain('2026-07-01: 1,000')
+    expect(writes[0]).toContain('Alpha')
+  })
+
+  it('reports a clipboard rejection as a copy failure', async () => {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: async (): Promise<void> => {
+          throw new Error('denied')
+        },
+      },
+    })
+    await mountReady()
+    fireEvent.click(screen.getByLabelText(zh.copyReport))
+    await waitFor(() => {
+      expect(screen.getByText(zh.copyFailed)).toBeTruthy()
+    })
+  })
+
+  it('reports a missing clipboard API as a copy failure', async () => {
+    Reflect.deleteProperty(navigator, 'clipboard')
+    await mountReady()
+    fireEvent.click(screen.getByLabelText(zh.copyReport))
+    await waitFor(() => {
+      expect(screen.getByText(zh.copyFailed)).toBeTruthy()
+    })
+  })
+
+  it('composes the plain-text report without series or sessions', () => {
+    const empty = report({ series: [], bySession: [] })
+    const text = composeReportText(empty, t)
+    expect(text.startsWith(zh.title + '\n' + zh.totalTokens + ': 95,000')).toBe(
+      true,
+    )
+    expect(text.includes('2026-07-01')).toBe(false)
+    expect(text.includes(zh.bySession)).toBe(false)
+  })
+
+  it('marks sessions without a projection as not counted in the breakdown', async () => {
+    const missing = sessionRow({
+      sessionId: sid('missing'),
+      title: null,
+      measured: false,
+      asOfSeq: null,
+    })
+    await mountReady({ bySession: [missing] })
+    fireEvent.click(screen.getByRole('tab', { name: zh.bySession }))
+    expect(screen.getByText(zh.untitledSession)).toBeTruthy()
+    expect(screen.getByText(new RegExp(zh.unmeasured))).toBeTruthy()
+  })
+
+  it('shows a short id fragment for long session ids', async () => {
+    const longId = sessionRow({
+      sessionId: sid('0123456789abcdef-suffix'),
+      title: null,
+      measured: false,
+      asOfSeq: null,
+    })
+    await mountReady({ bySession: [longId] })
+    fireEvent.click(screen.getByRole('tab', { name: zh.bySession }))
+    expect(screen.getByText(/def-suffix/)).toBeTruthy()
+  })
+
+  it('shows the share-of-total row in the heatmap tooltip', async () => {
+    await mountReady()
+    const cell = screen
+      .getAllByRole('button', { hidden: false })
+      .find(button => button.className.includes('cellHot'))!
+    fireEvent.mouseEnter(cell)
+    await waitFor(() => {
+      expect(screen.getByText(zh.shareOfTotal)).toBeTruthy()
+    })
+    await waitFor(() => {
+      expect(screen.getAllByText('31.6%').length).toBeGreaterThan(0)
+    })
+  })
+
+  it('renders a zero-total heatmap share row safely', () => {
+    render(
+      <Heatmap
+        heatmap={heatmap()}
+        total={0}
+        weekdayLabels={['一', '二', '三', '四', '五', '六', '日']}
+        t={t}
+      />,
+    )
+    const cell = screen
+      .getAllByRole('button')
+      .find(button => button.className.includes('cellHot'))!
+    fireEvent.mouseEnter(cell)
+    expect(screen.getByText(zh.shareOfTotal)).toBeTruthy()
+    expect(screen.getByText('0.0%')).toBeTruthy()
   })
 })
 
 describe('UsageStore', () => {
   it('reset drops the loaded report', async () => {
     const store = new UsageStore(apiWith(report()))
-    await act(async () => { await store.load() })
+    await act(async () => {
+      await store.load()
+    })
     expect(store.store.getSnapshot().status).toBe('ready')
     store.reset()
     expect(store.store.getSnapshot().status).toBe('idle')
   })
 
   it('records a non-Error rejection as its string form', async () => {
-    const store = new UsageStore({ describe: async (): Promise<UsageResponse> => { throw 'boom' } })
-    await act(async () => { await store.load() })
+    const store = new UsageStore({
+      describe: async (): Promise<UsageResponse> => {
+        throw 'boom'
+      },
+    })
+    await act(async () => {
+      await store.load()
+    })
     const state = store.store.getSnapshot()
     expect(state.status).toBe('error')
     expect(state.error).toBe('boom')
@@ -337,10 +754,15 @@ describe('UsageStore', () => {
   it('records a refused wire response as its error message', async () => {
     const store = new UsageStore({
       describe: async (): Promise<UsageResponse> => ({
-        result: { ok: false, error: { code: 'internal', message: 'host says no', details: {} } },
+        result: {
+          ok: false,
+          error: { code: 'internal', message: 'host says no', details: {} },
+        },
       }),
     })
-    await act(async () => { await store.load() })
+    await act(async () => {
+      await store.load()
+    })
     expect(store.store.getSnapshot().error).toBe('host says no')
   })
 
@@ -348,15 +770,21 @@ describe('UsageStore', () => {
     const settles: Array<(value: unknown) => void> = []
     const store = new UsageStore({
       describe: (): Promise<UsageResponse> =>
-        new Promise((_resolve, reject) => { settles.push(reject) }),
+        new Promise((_resolve, reject) => {
+          settles.push(reject)
+        }),
     })
     const first = store.load()
     const second = store.load()
     settles[0]!(new Error('stale failure'))
-    await act(async () => { await first })
+    await act(async () => {
+      await first
+    })
     expect(store.store.getSnapshot().status).toBe('loading')
     settles[1]!(new Error('still failing'))
-    await act(async () => { await second })
+    await act(async () => {
+      await second
+    })
     expect(store.store.getSnapshot().status).toBe('error')
     expect(store.store.getSnapshot().error).toBe('still failing')
   })
@@ -365,16 +793,22 @@ describe('UsageStore', () => {
     const settles: Array<(value: UsageResponse) => void> = []
     const store = new UsageStore({
       describe: (): Promise<UsageResponse> =>
-        new Promise((resolve) => { settles.push(resolve) }),
+        new Promise((resolve) => {
+          settles.push(resolve)
+        }),
     })
     const first = store.load()
     const second = store.load()
     // The older call settles first; its result must be discarded.
     settles[0]!({ result: { ok: true, value: report() } })
-    await act(async () => { await first })
+    await act(async () => {
+      await first
+    })
     expect(store.store.getSnapshot().status).toBe('loading')
     settles[1]!({ result: { ok: true, value: report() } })
-    await act(async () => { await second })
+    await act(async () => {
+      await second
+    })
     expect(store.store.getSnapshot().status).toBe('ready')
   })
 })

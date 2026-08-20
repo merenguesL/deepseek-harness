@@ -10,8 +10,18 @@ import { useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { UsageTokenBuckets } from './report-types.ts'
 import {
-  bucketKeyLabel, compactTokens, formatPercent, formatTokens, peakIndexOf,
-  periodDelta, rollup, trailingAverage, type Granularity,
+  bucketKeyLabel,
+  compactTokens,
+  filterRangeSeries,
+  formatPercent,
+  formatTokens,
+  peakIndexOf,
+  periodDelta,
+  rollup,
+  seriesTotal,
+  trailingAverage,
+  type Granularity,
+  type TrendRange,
 } from './usage-math.ts'
 import type { UsageDayBucket } from './report-types.ts'
 import type { UsageKey } from './locales.ts'
@@ -31,14 +41,21 @@ export interface TooltipRow {
 }
 
 /** A positioned tooltip card; the caller owns the anchor styles. */
-export function ChartTooltip(props: { title: string; rows: readonly TooltipRow[]; style: React.CSSProperties }): ReactNode {
+export function ChartTooltip(props: {
+  title: string
+  rows: readonly TooltipRow[]
+  style: React.CSSProperties
+}): ReactNode {
   return (
     <div className={css.tooltip} style={props.style} role="tooltip">
       <div className={css.tooltipTitle}>{props.title}</div>
       {props.rows.map(row => (
         <div key={row.name} className={css.tooltipRow}>
           <span className={css.tooltipRowName}>
-            <span className={css.tooltipDot} style={{ background: row.color }} />
+            <span
+              className={css.tooltipDot}
+              style={{ background: row.color }}
+            />
             {row.name}
           </span>
           <span className={css.tooltipValue}>
@@ -62,14 +79,38 @@ export interface UsageSegment {
 // css-module class lookups are static strings at runtime; the `?? ''` fallback only satisfies the indexed-access type.
 /* v8 ignore next -- see above */
 export const SEGMENTS: readonly UsageSegment[] = [
-  { key: 'uncachedInputTokens', labelKey: 'inputTokensFull', colorClass: css.segInput ?? '', color: 'var(--usage-input)' },
-  { key: 'cacheReadTokens', labelKey: 'cacheRead', colorClass: css.segCacheRead ?? '', color: 'var(--usage-cache-read)' },
-  { key: 'cacheWriteTokens', labelKey: 'cacheWrite', colorClass: css.segCacheWrite ?? '', color: 'var(--usage-cache-write)' },
-  { key: 'outputTokens', labelKey: 'outputTokens', colorClass: css.segOutput ?? '', color: 'var(--usage-output)' },
+  {
+    key: 'uncachedInputTokens',
+    labelKey: 'inputTokensFull',
+    colorClass: css.segInput ?? '',
+    color: 'var(--usage-input)',
+  },
+  {
+    key: 'cacheReadTokens',
+    labelKey: 'cacheRead',
+    colorClass: css.segCacheRead ?? '',
+    color: 'var(--usage-cache-read)',
+  },
+  {
+    key: 'cacheWriteTokens',
+    labelKey: 'cacheWrite',
+    colorClass: css.segCacheWrite ?? '',
+    color: 'var(--usage-cache-write)',
+  },
+  {
+    key: 'outputTokens',
+    labelKey: 'outputTokens',
+    colorClass: css.segOutput ?? '',
+    color: 'var(--usage-output)',
+  },
 ]
 
 /** Exact token figures of one buckets object, in billing order. */
-function bucketRows(buckets: UsageTokenBuckets, t: T, total: number): TooltipRow[] {
+function bucketRows(
+  buckets: UsageTokenBuckets,
+  t: T,
+  total: number,
+): TooltipRow[] {
   return SEGMENTS.map(segment => ({
     name: t(segment.labelKey),
     value: formatTokens(buckets[segment.key]),
@@ -108,8 +149,12 @@ export function CompositionBar(props: CompositionBarProps): ReactNode {
             key={segment.key}
             className={cls('segment') + ' ' + segment.colorClass}
             style={{ width: `${segment.width}%` }}
-            onMouseEnter={() => { setHovered(segment.index) }}
-            onMouseLeave={() => { setHovered(null) }}
+            onMouseEnter={() => {
+              setHovered(segment.index)
+            }}
+            onMouseLeave={() => {
+              setHovered(null)
+            }}
           />
         ))}
       </div>
@@ -118,38 +163,48 @@ export function CompositionBar(props: CompositionBarProps): ReactNode {
           <span
             key={segment.key}
             className={css.legendItem}
-            onMouseEnter={() => { setHovered(segment.index) }}
-            onMouseLeave={() => { setHovered(null) }}
+            onMouseEnter={() => {
+              setHovered(segment.index)
+            }}
+            onMouseLeave={() => {
+              setHovered(null)
+            }}
           >
-            <span className={css.swatch} style={{ background: segment.color }} />
+            <span
+              className={css.swatch}
+              style={{ background: segment.color }}
+            />
             {t(segment.labelKey)}
-            <span className={css.legendPercent}>{formatPercent(segment.width / 100)}</span>
+            <span className={css.legendPercent}>
+              {formatPercent(segment.width / 100)}
+            </span>
           </span>
         ))}
       </div>
-      {hovered !== null && (() => {
-        const hoveredSegment = segments[hovered]
-        /* v8 ignore next -- hovered is a segment index, so the lookup always lands */
-        if (hoveredSegment === undefined) return null
-        const rows = bucketRows(buckets, t, total).map((row, index) => {
-          if (index !== hovered) return row
-          const { trailing: _trailing, ...rest } = row
-          // bucketRows always sets trailing; the fallback satisfies the type.
-          /* v8 ignore next -- see above */
-          return { ...rest, value: row.value + ' · ' + (row.trailing ?? '') }
-        })
-        return (
-          <ChartTooltip
-            title={t('totalTokens')}
-            rows={rows}
-            style={{
-              left: `clamp(8%, ${hoveredSegment.start + hoveredSegment.width / 2}%, 92%)`,
-              top: 26,
-              transform: 'translateX(-50%)',
-            }}
-          />
-        )
-      })()}
+      {hovered !== null &&
+        (() => {
+          const hoveredSegment = segments[hovered]
+          /* v8 ignore next -- hovered is a segment index, so the lookup always lands */
+          if (hoveredSegment === undefined) return null
+          const rows = bucketRows(buckets, t, total).map((row, index) => {
+            if (index !== hovered) return row
+            const { trailing: _trailing, ...rest } = row
+            // bucketRows always sets trailing; the fallback satisfies the type.
+            /* v8 ignore next -- see above */
+            return { ...rest, value: row.value + ' · ' + (row.trailing ?? '') }
+          })
+          return (
+            <ChartTooltip
+              title={t('totalTokens')}
+              rows={rows}
+              style={{
+                left: `clamp(8%, ${hoveredSegment.start + hoveredSegment.width / 2}%, 92%)`,
+                top: 26,
+                transform: 'translateX(-50%)',
+              }}
+            />
+          )
+        })()}
     </div>
   )
 }
@@ -173,18 +228,38 @@ export function CacheRateBar(props: CacheRateBarProps): ReactNode {
   const rate = cacheReadTokens / prompt
   return (
     <div className={css.composition}>
-      <div className={css.bar} onMouseEnter={() => { setHovered(true) }} onMouseLeave={() => { setHovered(false) }}>
-        <div className={cls('segment') + ' ' + cls('segCacheRead')} style={{ width: `${rate * 100}%` }} />
-        <div className={cls('segment') + ' ' + cls('segMiss')} style={{ width: `${(1 - rate) * 100}%` }} />
+      <div
+        className={css.bar}
+        onMouseEnter={() => {
+          setHovered(true)
+        }}
+        onMouseLeave={() => {
+          setHovered(false)
+        }}
+      >
+        <div
+          className={cls('segment') + ' ' + cls('segCacheRead')}
+          style={{ width: `${rate * 100}%` }}
+        />
+        <div
+          className={cls('segment') + ' ' + cls('segMiss')}
+          style={{ width: `${(1 - rate) * 100}%` }}
+        />
       </div>
       <div className={css.legend}>
         <span className={css.legendItem}>
-          <span className={css.swatch} style={{ background: 'var(--usage-cache-read)' }} />
+          <span
+            className={css.swatch}
+            style={{ background: 'var(--usage-cache-read)' }}
+          />
           {t('cacheRead')}
           <span className={css.legendPercent}>{formatPercent(rate)}</span>
         </span>
         <span className={css.legendItem}>
-          <span className={css.swatch} style={{ background: 'var(--dsw-alias-label-tertiary)' }} />
+          <span
+            className={css.swatch}
+            style={{ background: 'var(--dsw-alias-label-tertiary)' }}
+          />
           {t('cacheMiss')}
           <span className={css.legendPercent}>{formatPercent(1 - rate)}</span>
         </span>
@@ -193,10 +268,27 @@ export function CacheRateBar(props: CacheRateBarProps): ReactNode {
         <ChartTooltip
           title={t('cacheRateBar')}
           rows={[
-            { name: t('cacheRead'), value: formatTokens(cacheReadTokens), color: 'var(--usage-cache-read)', trailing: formatPercent(rate) },
-            { name: t('inputTokens'), value: formatTokens(uncachedInputTokens), color: 'var(--usage-input)' },
-            { name: t('cacheWrite'), value: formatTokens(cacheWriteTokens), color: 'var(--usage-cache-write)' },
-            { name: t('totalTokens'), value: formatTokens(prompt), color: 'var(--dsw-alias-label-tertiary)' },
+            {
+              name: t('cacheRead'),
+              value: formatTokens(cacheReadTokens),
+              color: 'var(--usage-cache-read)',
+              trailing: formatPercent(rate),
+            },
+            {
+              name: t('inputTokens'),
+              value: formatTokens(uncachedInputTokens),
+              color: 'var(--usage-input)',
+            },
+            {
+              name: t('cacheWrite'),
+              value: formatTokens(cacheWriteTokens),
+              color: 'var(--usage-cache-write)',
+            },
+            {
+              name: t('totalTokens'),
+              value: formatTokens(prompt),
+              color: 'var(--dsw-alias-label-tertiary)',
+            },
           ]}
           style={{ left: '50%', top: 26, transform: 'translateX(-50%)' }}
         />
@@ -234,23 +326,38 @@ function niceCeil(value: number): number {
 
 /**
  * The trend chart: stacked buckets per selected granularity with a 7-day
- * trailing average (day mode), the peak bucket marked, and a hover tooltip
- * per bar showing the exact breakdown.
+ * trailing average (day mode), the peak bucket marked, a trailing range
+ * filter, and a hover tooltip per bar showing the exact breakdown.
  */
 export function SeriesChart(props: SeriesChartProps): ReactNode {
   const { series, t } = props
   const [granularity, setGranularity] = useState<Granularity>('day')
+  const [range, setRange] = useState<TrendRange>('all')
   const [hovered, setHovered] = useState<number | null>(null)
-  const buckets = useMemo(() => rollup(series, granularity), [series, granularity])
+  const visible = useMemo(
+    () => filterRangeSeries(series, range),
+    [series, range],
+  )
+  const buckets = useMemo(
+    () => rollup(visible, granularity),
+    [visible, granularity],
+  )
   const averages = useMemo(
-    () => (granularity === 'day' ? trailingAverage(buckets) : buckets.map(() => null)),
+    () =>
+      granularity === 'day'
+        ? trailingAverage(buckets)
+        : buckets.map(() => null),
     [buckets, granularity],
   )
-  const delta = useMemo(() => periodDelta(buckets, granularity), [buckets, granularity])
+  const delta = useMemo(
+    () => periodDelta(buckets, granularity),
+    [buckets, granularity],
+  )
   const peak = useMemo(() => peakIndexOf(buckets), [buckets])
   const max = useMemo(() => {
     let highest = 0
-    for (const bucket of buckets) highest = Math.max(highest, bucket.totalTokens)
+    for (const bucket of buckets)
+      highest = Math.max(highest, bucket.totalTokens)
     for (const average of averages) {
       if (average !== null) highest = Math.max(highest, average)
     }
@@ -259,7 +366,8 @@ export function SeriesChart(props: SeriesChartProps): ReactNode {
 
   const slot = PLOT_WIDTH / Math.max(1, buckets.length)
   const barWidth = Math.max(2, slot * 0.66)
-  const yOf = (value: number): number => PAD_TOP + PLOT_HEIGHT - (value / max) * PLOT_HEIGHT
+  const yOf = (value: number): number =>
+    PAD_TOP + PLOT_HEIGHT - (value / max) * PLOT_HEIGHT
   const gridlines = [0, 0.25, 0.5, 0.75, 1]
   const labelStep = Math.max(1, Math.ceil(buckets.length / 6))
 
@@ -273,7 +381,16 @@ export function SeriesChart(props: SeriesChartProps): ReactNode {
   })
 
   const granularityKey = (value: Granularity): UsageKey =>
-    value === 'day' ? 'granularityDay' : value === 'week' ? 'granularityWeek' : 'granularityMonth'
+    value === 'day'
+      ? 'granularityDay'
+      : value === 'week'
+        ? 'granularityWeek'
+        : 'granularityMonth'
+  const RANGES: readonly TrendRange[] = ['all', 7, 30, 90]
+  const rangeKey = (value: TrendRange): string =>
+    value === 'all'
+      ? t('rangeAll')
+      : t('rangeDays').replace('{days}', String(value))
 
   return (
     <>
@@ -285,10 +402,38 @@ export function SeriesChart(props: SeriesChartProps): ReactNode {
               type="button"
               role="tab"
               aria-selected={granularity === option}
-              className={cls('toggleButton') + (granularity === option ? ' ' + cls('toggleButtonActive') : '')}
-              onClick={() => { setGranularity(option) }}
+              className={
+                cls('toggleButton') +
+                (granularity === option ? ' ' + cls('toggleButtonActive') : '')
+              }
+              onClick={() => {
+                setGranularity(option)
+              }}
             >
               {t(granularityKey(option))}
+            </button>
+          ))}
+        </div>
+        <div
+          className={css.toggle}
+          role="radiogroup"
+          aria-label={t('trendRange')}
+        >
+          {RANGES.map(option => (
+            <button
+              key={option}
+              type="button"
+              role="radio"
+              aria-checked={range === option}
+              className={
+                cls('toggleButton') +
+                (range === option ? ' ' + cls('toggleButtonActive') : '')
+              }
+              onClick={() => {
+                setRange(option)
+              }}
+            >
+              {rangeKey(option)}
             </button>
           ))}
         </div>
@@ -296,14 +441,22 @@ export function SeriesChart(props: SeriesChartProps): ReactNode {
           <span className={css.delta}>
             <span
               className={
-                cls('deltaValue') + ' ' +
-                (delta.delta > 0.0005 ? cls('deltaUp') : delta.delta < -0.0005 ? cls('deltaDown') : '')
+                cls('deltaValue') +
+                ' ' +
+                (delta.delta > 0.0005
+                  ? cls('deltaUp')
+                  : delta.delta < -0.0005
+                    ? cls('deltaDown')
+                    : '')
               }
             >
               {delta.delta > 0.0005
                 ? t('deltaUp').replace('{delta}', formatPercent(delta.delta, 0))
                 : delta.delta < -0.0005
-                  ? t('deltaDown').replace('{delta}', formatPercent(-delta.delta, 0))
+                  ? t('deltaDown').replace(
+                    '{delta}',
+                    formatPercent(-delta.delta, 0),
+                  )
                   : t('deltaFlat')}
             </span>
           </span>
@@ -320,8 +473,19 @@ export function SeriesChart(props: SeriesChartProps): ReactNode {
             const y = yOf(max * fraction)
             return (
               <g key={fraction}>
-                <line className={css.gridLine} x1={PAD_LEFT} y1={y} x2={WIDTH - PAD_RIGHT} y2={y} />
-                <text className={css.axisLabel} x={PAD_LEFT - 5} y={y + 3} textAnchor="end">
+                <line
+                  className={css.gridLine}
+                  x1={PAD_LEFT}
+                  y1={y}
+                  x2={WIDTH - PAD_RIGHT}
+                  y2={y}
+                />
+                <text
+                  className={css.axisLabel}
+                  x={PAD_LEFT - 5}
+                  y={y + 3}
+                  textAnchor="end"
+                >
                   {compactTokens(max * fraction)}
                 </text>
               </g>
@@ -332,7 +496,15 @@ export function SeriesChart(props: SeriesChartProps): ReactNode {
             const left = x + (slot - barWidth) / 2
             let offset = 0
             return (
-              <g key={bucket.key} onMouseEnter={() => { setHovered(index) }} onMouseLeave={() => { setHovered(null) }}>
+              <g
+                key={bucket.key}
+                onMouseEnter={() => {
+                  setHovered(index)
+                }}
+                onMouseLeave={() => {
+                  setHovered(null)
+                }}
+              >
                 {SEGMENTS.map((segment) => {
                   const height = (bucket[segment.key] / max) * PLOT_HEIGHT
                   const rect = (
@@ -348,7 +520,13 @@ export function SeriesChart(props: SeriesChartProps): ReactNode {
                   offset += bucket[segment.key]
                   return rect
                 })}
-                <rect x={x} y={PAD_TOP} width={slot} height={PLOT_HEIGHT} fill="transparent" />
+                <rect
+                  x={x}
+                  y={PAD_TOP}
+                  width={slot}
+                  height={PLOT_HEIGHT}
+                  fill="transparent"
+                />
               </g>
             )
           })}
@@ -385,32 +563,65 @@ export function SeriesChart(props: SeriesChartProps): ReactNode {
               </g>
             )
           })()}
-          {buckets.map((bucket, index) => (
+          {buckets.map((bucket, index) =>
             index % labelStep === 0 ? (
-              <text key={bucket.key} className={css.axisLabel} x={PAD_LEFT + slot * (index + 0.5)} y={HEIGHT - 6} textAnchor="middle">
+              <text
+                key={bucket.key}
+                className={css.axisLabel}
+                x={PAD_LEFT + slot * (index + 0.5)}
+                y={HEIGHT - 6}
+                textAnchor="middle"
+              >
                 {bucketKeyLabel(bucket.key, granularity)}
               </text>
-            ) : null
-          ))}
+            ) : null,
+          )}
         </svg>
-        {hovered !== null && (() => {
-          const bucket = buckets[hovered]
-          /* v8 ignore next -- hovered indexes an existing bucket */
-          if (bucket === undefined) return null
+        {hovered !== null &&
+          (() => {
+            const bucket = buckets[hovered]
+            /* v8 ignore next -- hovered indexes an existing bucket */
+            if (bucket === undefined) return null
+            return (
+              <ChartTooltip
+                title={bucket.key}
+                rows={[
+                  ...bucketRows(bucket, t, bucket.totalTokens),
+                  {
+                    name: t('totalTokens'),
+                    value: formatTokens(bucket.totalTokens),
+                    color: 'var(--dsw-alias-label-tertiary)',
+                  },
+                  {
+                    name: t('calls'),
+                    value: String(bucket.calls),
+                    color: 'var(--dsw-alias-label-tertiary)',
+                  },
+                ]}
+                style={{
+                  left: `clamp(10%, ${((hovered + 0.5) / buckets.length) * 100}%, 90%)`,
+                  top: 4,
+                  transform: 'translateX(-50%)',
+                }}
+              />
+            )
+          })()}
+      </div>
+      {range !== 'all' &&
+        (() => {
+          const sum = seriesTotal(visible)
           return (
-            <ChartTooltip
-              title={bucket.key}
-              rows={[
-                ...bucketRows(bucket, t, bucket.totalTokens),
-                { name: t('totalTokens'), value: formatTokens(bucket.totalTokens), color: 'var(--dsw-alias-label-tertiary)' },
-                { name: t('calls'), value: String(bucket.calls), color: 'var(--dsw-alias-label-tertiary)' },
-              ]}
-              style={{ left: `clamp(10%, ${((hovered + 0.5) / buckets.length) * 100}%, 90%)`, top: 4, transform: 'translateX(-50%)' }}
-            />
+            <p className={css.rangeSummary}>
+              {t('rangeSummary')
+                .replace('{days}', String(range))
+                .replace('{tokens}', formatTokens(sum.tokens))
+                .replace('{calls}', String(sum.calls))}
+            </p>
           )
         })()}
-      </div>
-      <p className={css.panelHint}>{t('trendHint').replace('{unit}', t(granularityKey(granularity)))}</p>
+      <p className={css.panelHint}>
+        {t('trendHint').replace('{unit}', t(granularityKey(granularity)))}
+      </p>
     </>
   )
 }

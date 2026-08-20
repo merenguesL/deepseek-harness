@@ -2,41 +2,71 @@
 
 import type { SessionSummary } from '@deepseek-ai/dsh-api-remotes/client'
 import type {
-  UsageDayBucket, UsageDescribeValue, UsageHeatmap, UsageSessionRow, UsageTokenBuckets,
-  UsageTotals, UsageWorkspaceRow,
+  UsageDayBucket,
+  UsageDescribeValue,
+  UsageHeatmap,
+  UsageSessionRow,
+  UsageTokenBuckets,
+  UsageTotals,
+  UsageWorkspaceRow,
 } from './report-types.ts'
 
 const ZERO: UsageTokenBuckets = {
-  uncachedInputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0,
+  uncachedInputTokens: 0,
+  outputTokens: 0,
+  cacheReadTokens: 0,
+  cacheWriteTokens: 0,
 }
 
 function finiteNonnegative(value: unknown): number {
-  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.floor(value) : 0
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+    ? Math.floor(value)
+    : 0
 }
 
 function totalTokens(buckets: UsageTokenBuckets): number {
-  return buckets.uncachedInputTokens + buckets.outputTokens
-    + buckets.cacheReadTokens + buckets.cacheWriteTokens
+  return (
+    buckets.uncachedInputTokens +
+    buckets.outputTokens +
+    buckets.cacheReadTokens +
+    buckets.cacheWriteTokens
+  )
 }
 
 function promptTokens(buckets: UsageTokenBuckets): number {
-  return buckets.uncachedInputTokens + buckets.cacheReadTokens + buckets.cacheWriteTokens
+  return (
+    buckets.uncachedInputTokens +
+    buckets.cacheReadTokens +
+    buckets.cacheWriteTokens
+  )
 }
 
-function bucketOf(session: SessionSummary): UsageTokenBuckets {
-  const values = session.projections?.values as Record<string, unknown> | undefined
+/** One session's projected usage as the report consumes it, or null when the
+ * session.list row carried no `tokenUsage` value. */
+function projectionOf(
+  session: SessionSummary,
+): { buckets: UsageTokenBuckets; asOfSeq: number } | null {
+  const values = session.projections?.values as
+    | Record<string, unknown>
+    | undefined
   const usage = values?.tokenUsage
-  if (typeof usage !== 'object' || usage === null) return { ...ZERO }
+  if (typeof usage !== 'object' || usage === null) return null
   const raw = usage as Record<string, unknown>
   return {
-    uncachedInputTokens: finiteNonnegative(raw.uncachedInputTokens),
-    outputTokens: finiteNonnegative(raw.outputTokens),
-    cacheReadTokens: finiteNonnegative(raw.cacheReadTokens),
-    cacheWriteTokens: finiteNonnegative(raw.cacheWriteTokens),
+    buckets: {
+      uncachedInputTokens: finiteNonnegative(raw.uncachedInputTokens),
+      outputTokens: finiteNonnegative(raw.outputTokens),
+      cacheReadTokens: finiteNonnegative(raw.cacheReadTokens),
+      cacheWriteTokens: finiteNonnegative(raw.cacheWriteTokens),
+    },
+    asOfSeq: session.projections?.asOfSeq ?? 0,
   }
 }
 
-function add(left: UsageTokenBuckets, right: UsageTokenBuckets): UsageTokenBuckets {
+function add(
+  left: UsageTokenBuckets,
+  right: UsageTokenBuckets,
+): UsageTokenBuckets {
   return {
     uncachedInputTokens: left.uncachedInputTokens + right.uncachedInputTokens,
     outputTokens: left.outputTokens + right.outputTokens,
@@ -60,7 +90,9 @@ function emptyHeatmap(): UsageHeatmap {
   return Array.from({ length: 24 }, () => Array.from({ length: 7 }, () => 0))
 }
 
-function rowOf(session: SessionSummary, buckets: UsageTokenBuckets): UsageSessionRow {
+function rowOf(session: SessionSummary): UsageSessionRow {
+  const projection = projectionOf(session)
+  const buckets = projection?.buckets ?? { ...ZERO }
   const total = totalTokens(buckets)
   // session.list exposes the durable cumulative projection but not its source
   // step count. One reported projection therefore proves at least one call.
@@ -69,11 +101,13 @@ function rowOf(session: SessionSummary, buckets: UsageTokenBuckets): UsageSessio
     ...buckets,
     sessionId: session.sessionId,
     title: null,
-    ...session.cwd === undefined ? {} : { cwd: session.cwd },
+    ...(session.cwd === undefined ? {} : { cwd: session.cwd }),
     // The public list contract intentionally has no creation timestamp; using
     // updatedAt keeps the row sortable without inventing a second source.
     createdAt: session.updatedAt,
     updatedAt: session.updatedAt,
+    measured: projection !== null,
+    asOfSeq: projection?.asOfSeq ?? null,
     totalTokens: total,
     cacheRate: cacheRateOf(buckets),
     calls,
@@ -124,9 +158,15 @@ function workspaceRows(rows: readonly UsageSessionRow[]): UsageWorkspaceRow[] {
  * @param generatedAt - report timestamp, injectable for deterministic tests.
  * @returns dashboard report.
  */
-export function buildUsageReport(sessions: readonly SessionSummary[], generatedAt = Date.now()): UsageDescribeValue {
-  const rows = sessions.map(session => rowOf(session, bucketOf(session)))
-  const totalsBuckets = rows.reduce<UsageTokenBuckets>((sum, row) => add(sum, row), { ...ZERO })
+export function buildUsageReport(
+  sessions: readonly SessionSummary[],
+  generatedAt = Date.now(),
+): UsageDescribeValue {
+  const rows = sessions.map(session => rowOf(session))
+  const totalsBuckets = rows.reduce<UsageTokenBuckets>(
+    (sum, row) => add(sum, row),
+    { ...ZERO },
+  )
   const prompt = promptTokens(totalsBuckets)
   const active = rows.filter(row => row.totalTokens > 0)
   const totals: UsageTotals = {
@@ -136,11 +176,21 @@ export function buildUsageReport(sessions: readonly SessionSummary[], generatedA
     cacheRate: cacheRateOf(totalsBuckets),
     calls: rows.reduce((sum, row) => sum + row.calls, 0),
     sessions: rows.length,
+    measuredSessions: rows.reduce(
+      (sum, row) => sum + (row.measured ? 1 : 0),
+      0,
+    ),
     turns: 0,
     steps: 0,
     llmMs: 0,
-    firstActivityAt: active.length === 0 ? null : Math.min(...active.map(row => row.updatedAt)),
-    lastActivityAt: active.length === 0 ? null : Math.max(...active.map(row => row.updatedAt)),
+    firstActivityAt:
+      active.length === 0
+        ? null
+        : Math.min(...active.map(row => row.updatedAt)),
+    lastActivityAt:
+      active.length === 0
+        ? null
+        : Math.max(...active.map(row => row.updatedAt)),
   }
   const days = new Map<string, UsageDayBucket>()
   const heatmap = emptyHeatmap()
@@ -149,12 +199,18 @@ export function buildUsageReport(sessions: readonly SessionSummary[], generatedA
     const current = days.get(day)
     const dayRow = current ?? { ...ZERO, day, totalTokens: 0, calls: 0 }
     const buckets = add(dayRow, row)
-    days.set(day, { ...buckets, day, totalTokens: totalTokens(buckets), calls: dayRow.calls + row.calls })
+    days.set(day, {
+      ...buckets,
+      day,
+      totalTokens: totalTokens(buckets),
+      calls: dayRow.calls + row.calls,
+    })
     const date = new Date(row.updatedAt)
     const hour = date.getHours()
     const weekday = date.getDay()
     const cells = heatmap[hour]
-    if (cells !== undefined) cells[weekday] = (cells[weekday] ?? 0) + row.totalTokens
+    if (cells !== undefined)
+      cells[weekday] = (cells[weekday] ?? 0) + row.totalTokens
   }
   return {
     totals,

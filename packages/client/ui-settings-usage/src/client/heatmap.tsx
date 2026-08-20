@@ -8,7 +8,7 @@
 import { useState } from 'react'
 import type { ReactNode } from 'react'
 import type { UsageHeatmap } from './report-types.ts'
-import { formatTokens } from './usage-math.ts'
+import { formatPercent, formatTokens } from './usage-math.ts'
 import type { UsageKey } from './locales.ts'
 import { ChartTooltip } from './charts.tsx'
 import css from './UsageSection.module.css'
@@ -20,8 +20,18 @@ const RAMP = [0.1, 0.3, 0.55, 0.8, 1]
 
 interface HeatmapProps {
   heatmap: UsageHeatmap
+  /** Whole-report token total for the per-cell share row. */
+  total: number
   /** Row order of weekday labels: index 0 = Monday (exactly seven). */
-  weekdayLabels: readonly [string, string, string, string, string, string, string]
+  weekdayLabels: readonly [
+    string,
+    string,
+    string,
+    string,
+    string,
+    string,
+    string,
+  ]
   t: T
 }
 
@@ -36,8 +46,11 @@ const ROWS = [0, 1, 2, 3, 4, 5, 6] as const
  * reorders rows to Monday-first for display.
  */
 export function Heatmap(props: HeatmapProps): ReactNode {
-  const { heatmap, weekdayLabels, t } = props
-  const [hovered, setHovered] = useState<{ hour: number; label: string } | null>(null)
+  const { heatmap, total, weekdayLabels, t } = props
+  const [hovered, setHovered] = useState<{
+    hour: number
+    label: string
+  } | null>(null)
   let max = 0
   for (const row of heatmap) {
     for (const value of row) max = Math.max(max, value)
@@ -61,7 +74,9 @@ export function Heatmap(props: HeatmapProps): ReactNode {
         </div>
         <div className={css.heatmapGrid}>
           <div className={css.heatmapHours}>
-            {HOURS.map(hour => <span key={hour}>{hour}</span>)}
+            {HOURS.map(hour => (
+              <span key={hour}>{hour}</span>
+            ))}
           </div>
           {ROWS.map(row =>
             HOURS.map((hour) => {
@@ -71,10 +86,19 @@ export function Heatmap(props: HeatmapProps): ReactNode {
                   key={row * 24 + hour}
                   type="button"
                   tabIndex={-1}
-                  className={cls('cell') + (value > 0 ? ' ' + cls('cellHot') : '')}
-                  style={{ opacity: value === 0 ? undefined : 0.08 + 0.92 * (value / max) }}
-                  onMouseEnter={() => { setHovered({ hour, label: weekdayLabels[row] }) }}
-                  onMouseLeave={() => { setHovered(null) }}
+                  className={
+                    cls('cell') + (value > 0 ? ' ' + cls('cellHot') : '')
+                  }
+                  style={{
+                    opacity:
+                      value === 0 ? undefined : 0.08 + 0.92 * (value / max),
+                  }}
+                  onMouseEnter={() => {
+                    setHovered({ hour, label: weekdayLabels[row] })
+                  }}
+                  onMouseLeave={() => {
+                    setHovered(null)
+                  }}
                   aria-label={t('heatmapCell')
                     .replace('{weekday}', weekdayLabels[row])
                     .replace('{hour}', String(hour))
@@ -98,20 +122,35 @@ export function Heatmap(props: HeatmapProps): ReactNode {
         </span>
         <span>{t('heatmapHigh')}</span>
       </div>
-      {hovered !== null && (() => {
-        const value = cellFor(hovered.hour, weekdayLabels.indexOf(hovered.label))
-        if (value === 0) return null
-        return (
-          <ChartTooltip
-            title={t('heatmapCell')
-              .replace('{weekday}', hovered.label)
-              .replace('{hour}', String(hovered.hour))
-              .replace('{tokens}', formatTokens(value))}
-            rows={[{ name: t('totalTokens'), value: formatTokens(value), color: 'var(--usage-input)' }]}
-            style={{ left: '50%', top: 190, transform: 'translateX(-50%)' }}
-          />
-        )
-      })()}
+      {hovered !== null &&
+        (() => {
+          const value = cellFor(
+            hovered.hour,
+            weekdayLabels.indexOf(hovered.label),
+          )
+          if (value === 0) return null
+          return (
+            <ChartTooltip
+              title={t('heatmapCell')
+                .replace('{weekday}', hovered.label)
+                .replace('{hour}', String(hovered.hour))
+                .replace('{tokens}', formatTokens(value))}
+              rows={[
+                {
+                  name: t('totalTokens'),
+                  value: formatTokens(value),
+                  color: 'var(--usage-input)',
+                },
+                {
+                  name: t('shareOfTotal'),
+                  value: formatPercent(total === 0 ? 0 : value / total),
+                  color: 'var(--usage-input)',
+                },
+              ]}
+              style={{ left: '50%', top: 190, transform: 'translateX(-50%)' }}
+            />
+          )
+        })()}
     </div>
   )
 }

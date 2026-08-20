@@ -1,8 +1,8 @@
 /**
  * Pure dashboard math for the usage section: token rollups across day, week,
  * and month granularities, trend figures (moving average, period deltas),
- * and display formatting. All functions are pure and locale-free; copy
- * lives in locales.ts, colors in the stylesheet.
+ * trailing range windows, and display formatting. All functions are pure and
+ * locale-free; copy lives in locales.ts, colors in the stylesheet.
  */
 
 import type { UsageDayBucket, UsageTokenBuckets } from './report-types.ts'
@@ -10,14 +10,77 @@ import type { UsageDayBucket, UsageTokenBuckets } from './report-types.ts'
 /** Time grain used by the usage trend and comparison views. */
 export type Granularity = 'day' | 'week' | 'month'
 
+/** Trailing-window preset of the trend range filter. */
+export type TrendRange = 'all' | 7 | 30 | 90
+
+/**
+ * Sharpen one {@link TrendRange} preset into its day count.
+ * @param range - the selected preset.
+ * @returns the trailing day count, or null to keep the full series.
+ */
+export function trendRangeDays(range: TrendRange): number | null {
+  return range === 'all' ? null : range
+}
+
+/**
+ * Keep only day buckets inside the trailing window of one trend range
+ * preset. The window is inclusive: `days` days ending today (local
+ * calendar), and future-dated buckets survive the filter.
+ * @param series - ascending local-day buckets from the plugin report.
+ * @param range - the selected preset.
+ * @param now - comparison instant as epoch milliseconds, injectable for
+ * deterministic tests.
+ * @returns the buckets whose day key falls inside the window.
+ */
+export function filterRangeSeries(
+  series: readonly UsageDayBucket[],
+  range: TrendRange,
+  now = Date.now(),
+): UsageDayBucket[] {
+  const days = trendRangeDays(range)
+  if (days === null) return [...series]
+  const floor = addDays(dayKeyOf(now), 1 - days)
+  return series.filter(bucket => bucket.day >= floor)
+}
+
+/**
+ * Sum tokens and calls over one day-bucket list.
+ * @param buckets - the buckets to aggregate.
+ * @returns total tokens and total calls of the list.
+ */
+export function seriesTotal(buckets: readonly UsageDayBucket[]): {
+  tokens: number
+  calls: number
+} {
+  return buckets.reduce(
+    (sum, bucket) => ({
+      tokens: sum.tokens + bucket.totalTokens,
+      calls: sum.calls + bucket.calls,
+    }),
+    { tokens: 0, calls: 0 },
+  )
+}
+
 /**
  * Sum all four disjoint token buckets.
  * @param buckets - token counts to add.
  * @returns total input, output, cache-read, and cache-write tokens.
  */
-export function totalTokensOf(buckets: Pick<UsageTokenBuckets, 'uncachedInputTokens' | 'outputTokens' | 'cacheReadTokens' | 'cacheWriteTokens'>): number {
-  return buckets.uncachedInputTokens + buckets.outputTokens
-    + buckets.cacheReadTokens + buckets.cacheWriteTokens
+export function totalTokensOf(
+  buckets: Pick<
+    UsageTokenBuckets,
+  | 'uncachedInputTokens'
+  | 'outputTokens'
+  | 'cacheReadTokens'
+  | 'cacheWriteTokens'
+  >,
+): number {
+  return (
+    buckets.uncachedInputTokens +
+  buckets.outputTokens +
+  buckets.cacheReadTokens +
+  buckets.cacheWriteTokens
+  )
 }
 
 /**
@@ -25,8 +88,17 @@ export function totalTokensOf(buckets: Pick<UsageTokenBuckets, 'uncachedInputTok
  * @param buckets - uncached input, cache-read, and cache-write counts.
  * @returns prompt-side token count.
  */
-export function promptTokensOf(buckets: Pick<UsageTokenBuckets, 'uncachedInputTokens' | 'cacheReadTokens' | 'cacheWriteTokens'>): number {
-  return buckets.uncachedInputTokens + buckets.cacheReadTokens + buckets.cacheWriteTokens
+export function promptTokensOf(
+  buckets: Pick<
+    UsageTokenBuckets,
+  'uncachedInputTokens' | 'cacheReadTokens' | 'cacheWriteTokens'
+  >,
+): number {
+  return (
+    buckets.uncachedInputTokens +
+  buckets.cacheReadTokens +
+  buckets.cacheWriteTokens
+  )
 }
 
 /**
@@ -100,7 +172,10 @@ export function monthKeyOf(day: string): string {
  * @param granularity - day (identity), week, or month.
  * @returns the rolled buckets, ascending.
  */
-export function rollup(series: readonly UsageDayBucket[], granularity: Granularity): RolledBucket[] {
+export function rollup(
+  series: readonly UsageDayBucket[],
+  granularity: Granularity,
+): RolledBucket[] {
   if (granularity === 'day') {
     return series.map(day => ({
       ...day,
@@ -110,27 +185,34 @@ export function rollup(series: readonly UsageDayBucket[], granularity: Granulari
   }
   const buckets = new Map<string, RolledBucket>()
   for (const day of series) {
-    const key = granularity === 'week' ? weekStartOf(day.day) : monthKeyOf(day.day)
+    const key =
+      granularity === 'week' ? weekStartOf(day.day) : monthKeyOf(day.day)
     const current = buckets.get(key)
     const start = Date.parse(`${key}T00:00:00`)
-    buckets.set(key, current === undefined ? {
+    buckets.set(
       key,
-      start,
-      uncachedInputTokens: day.uncachedInputTokens,
-      outputTokens: day.outputTokens,
-      cacheReadTokens: day.cacheReadTokens,
-      cacheWriteTokens: day.cacheWriteTokens,
-      totalTokens: day.totalTokens,
-      calls: day.calls,
-    } : {
-      ...current,
-      uncachedInputTokens: current.uncachedInputTokens + day.uncachedInputTokens,
-      outputTokens: current.outputTokens + day.outputTokens,
-      cacheReadTokens: current.cacheReadTokens + day.cacheReadTokens,
-      cacheWriteTokens: current.cacheWriteTokens + day.cacheWriteTokens,
-      totalTokens: current.totalTokens + day.totalTokens,
-      calls: current.calls + day.calls,
-    })
+      current === undefined
+        ? {
+          key,
+          start,
+          uncachedInputTokens: day.uncachedInputTokens,
+          outputTokens: day.outputTokens,
+          cacheReadTokens: day.cacheReadTokens,
+          cacheWriteTokens: day.cacheWriteTokens,
+          totalTokens: day.totalTokens,
+          calls: day.calls,
+        }
+        : {
+          ...current,
+          uncachedInputTokens:
+        current.uncachedInputTokens + day.uncachedInputTokens,
+          outputTokens: current.outputTokens + day.outputTokens,
+          cacheReadTokens: current.cacheReadTokens + day.cacheReadTokens,
+          cacheWriteTokens: current.cacheWriteTokens + day.cacheWriteTokens,
+          totalTokens: current.totalTokens + day.totalTokens,
+          calls: current.calls + day.calls,
+        },
+    )
   }
   // Days arrive ascending and the map keeps insertion order, so the
   // buckets are already ascending.
@@ -143,11 +225,16 @@ export function rollup(series: readonly UsageDayBucket[], granularity: Granulari
  * @param window - number of buckets in each average window.
  * @returns one average per bucket, with null until a full window exists.
  */
-export function trailingAverage(buckets: readonly RolledBucket[], window = 7): Array<number | null> {
+export function trailingAverage(
+  buckets: readonly RolledBucket[],
+  window = 7,
+): Array<number | null> {
   return buckets.map((_, index) => {
     if (index < window - 1) return null
     const windowed = buckets.slice(index - window + 1, index + 1)
-    return windowed.reduce((total, bucket) => total + bucket.totalTokens, 0) / window
+    return (
+      windowed.reduce((total, bucket) => total + bucket.totalTokens, 0) / window
+    )
   })
 }
 
@@ -164,7 +251,9 @@ export function periodDelta(
   const window = granularity === 'day' ? 7 : granularity === 'week' ? 4 : 3
   if (buckets.length < window * 2) return null
   const sum = (start: number, end: number): number =>
-    buckets.slice(start, end).reduce((total, bucket) => total + bucket.totalTokens, 0)
+    buckets
+      .slice(start, end)
+      .reduce((total, bucket) => total + bucket.totalTokens, 0)
   const current = sum(buckets.length - window, buckets.length)
   const previous = sum(buckets.length - window * 2, buckets.length - window)
   if (previous === 0) return null
@@ -240,7 +329,10 @@ export function formatPercent(ratio: number, digits = 1): string {
  * @param now - comparison instant as epoch milliseconds.
  * @returns a minute, hour, or day value up to one month, otherwise null.
  */
-export function relativeAgo(ms: number, now: number): { value: number; unit: 'minute' | 'hour' | 'day' } | null {
+export function relativeAgo(
+  ms: number,
+  now: number,
+): { value: number; unit: 'minute' | 'hour' | 'day' } | null {
   const minutes = Math.max(0, Math.floor((now - ms) / 60_000))
   if (minutes < 60) return { value: minutes, unit: 'minute' }
   const hours = Math.floor(minutes / 60)

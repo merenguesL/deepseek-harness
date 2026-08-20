@@ -6,8 +6,14 @@
 
 import { useState } from 'react'
 import type { ReactNode } from 'react'
+import type { SessionSummary } from '@deepseek-ai/dsh-api-remotes/client'
 import type { UsageDescribeValue } from './report-types.ts'
-import { compactTokens, formatPercent, relativeAgo, totalTokensOf } from './usage-math.ts'
+import {
+  compactTokens,
+  formatPercent,
+  relativeAgo,
+  totalTokensOf,
+} from './usage-math.ts'
 import type { UsageKey } from './locales.ts'
 import { SEGMENTS } from './charts.tsx'
 import css from './UsageSection.module.css'
@@ -24,7 +30,11 @@ interface BreakdownProps {
 type Tab = 'workspace' | 'session'
 
 /** The mini stacked bar shared by both breakdown lists. */
-function MiniBar(props: { buckets: Parameters<typeof totalTokensOf>[0]; total: number; t: T }): ReactNode {
+function MiniBar(props: {
+  buckets: Parameters<typeof totalTokensOf>[0]
+  total: number
+  t: T
+}): ReactNode {
   const { buckets, total, t } = props
   if (total === 0) return <span className={css.miniBar} />
   return (
@@ -34,7 +44,10 @@ function MiniBar(props: { buckets: Parameters<typeof totalTokensOf>[0]; total: n
         return width <= 0 ? null : (
           <span
             key={segment.key}
-            style={{ width: `${width}%`, background: segment.color }}
+            style={{
+              width: `${width}%`,
+              background: segment.color,
+            }}
             title={t(segment.labelKey)}
           />
         )
@@ -49,15 +62,26 @@ function basenameOf(path: string): string {
   return parts.at(-1) ?? path
 }
 
+/** Trailing id fragment for list rows whose durable title is unavailable. */
+function shortIdOf(id: SessionSummary['sessionId']): string {
+  const value = String(id)
+  return value.length <= 10 ? value : value.slice(-10)
+}
+
 function agoText(ms: number, now: number, t: T): string {
   const ago = relativeAgo(ms, now)
   if (ago === null) {
     const date = new Date(ms)
     const pad = (value: number): string => String(value).padStart(2, '0')
-    return t('sessionAgoDate').replace('{date}', `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`)
+    return t('sessionAgoDate').replace(
+      '{date}',
+      `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`,
+    )
   }
-  if (ago.unit === 'minute') return t('sessionAgoMinute').replace('{value}', String(ago.value))
-  if (ago.unit === 'hour') return t('sessionAgoHour').replace('{value}', String(ago.value))
+  if (ago.unit === 'minute')
+    return t('sessionAgoMinute').replace('{value}', String(ago.value))
+  if (ago.unit === 'hour')
+    return t('sessionAgoHour').replace('{value}', String(ago.value))
   return t('sessionAgoDay').replace('{value}', String(ago.value))
 }
 
@@ -73,17 +97,28 @@ export function Breakdown(props: BreakdownProps): ReactNode {
   const sessions = value.bySession
   return (
     <div>
-      <div className={css.breakdownTabs} role="tablist" aria-label={t('breakdown')}>
+      <div
+        className={css.breakdownTabs}
+        role="tablist"
+        aria-label={t('breakdown')}
+      >
         {(['workspace', 'session'] as const).map(option => (
           <button
             key={option}
             type="button"
             role="tab"
             aria-selected={tab === option}
-            className={cls('tab') + (tab === option ? ' ' + cls('tabActive') : '')}
-            onClick={() => { setTab(option) }}
+            className={
+              cls('tab') +
+                            (tab === option ? ' ' + cls('tabActive') : '')
+            }
+            onClick={() => {
+              setTab(option)
+            }}
           >
-            {option === 'workspace' ? t('byWorkspace') : t('bySession')}
+            {option === 'workspace'
+              ? t('byWorkspace')
+              : t('bySession')}
           </button>
         ))}
       </div>
@@ -95,42 +130,85 @@ export function Breakdown(props: BreakdownProps): ReactNode {
             {workspaces.map(workspace => (
               <div key={workspace.path} className={css.row}>
                 <div className={css.rowMain}>
-                  <div className={css.rowName}>{workspace.path === '' ? t('unknownWorkspace') : basenameOf(workspace.path)}</div>
+                  <div className={css.rowName}>
+                    {workspace.path === ''
+                      ? t('unknownWorkspace')
+                      : basenameOf(workspace.path)}
+                  </div>
                   <div className={css.rowSub}>
-                    {workspace.path === '' ? '' : workspace.path + ' · '}
+                    {workspace.path === ''
+                      ? ''
+                      : workspace.path + ' · '}
                     {`${t('sessions')}: ${workspace.sessions}`}
                   </div>
                 </div>
-                <MiniBar buckets={workspace} total={workspace.totalTokens} t={t} />
-                <span className={css.rowRate}>{formatPercent(workspace.cacheRate)}</span>
-                <span className={css.rowTokens}>{compactTokens(workspace.totalTokens)}</span>
-                <span className={css.rowCalls}>{workspace.calls}</span>
+                <MiniBar
+                  buckets={workspace}
+                  total={workspace.totalTokens}
+                  t={t}
+                />
+                <span className={css.rowRate}>
+                  {formatPercent(workspace.cacheRate)}
+                </span>
+                <span className={css.rowTokens}>
+                  {compactTokens(workspace.totalTokens)}
+                </span>
+                <span className={css.rowCalls}>
+                  {workspace.calls}
+                </span>
               </div>
             ))}
           </div>
         )
+      ) : sessions.length === 0 ? (
+        <p className={css.panelHint}>{t('noSessions')}</p>
       ) : (
-        sessions.length === 0 ? (
-          <p className={css.panelHint}>{t('noSessions')}</p>
-        ) : (
-          <div className={css.rows}>
-            {sessions.map(session => (
-              <div key={String(session.sessionId)} className={css.row}>
-                <div className={css.rowMain}>
-                  <div className={css.rowName}>{session.title ?? t('untitledSession')}</div>
-                  <div className={css.rowSub}>
-                    {session.cwd === undefined ? '' : basenameOf(session.cwd) + ' · '}
-                    {agoText(session.updatedAt, now, t)}
-                  </div>
+        <div className={css.rows}>
+          {sessions.map(session => (
+            <div
+              key={String(session.sessionId)}
+              className={css.row}
+            >
+              <div className={css.rowMain}>
+                <div className={css.rowName}>
+                  {session.title ?? t('untitledSession')}
                 </div>
-                <MiniBar buckets={session} total={session.totalTokens} t={t} />
-                <span className={css.rowRate}>{formatPercent(session.cacheRate)}</span>
-                <span className={css.rowTokens}>{compactTokens(session.totalTokens)}</span>
-                <span className={css.rowCalls}>{session.calls}</span>
+                <div
+                  className={
+                    cls('rowSub') +
+                                        (session.measured
+                                          ? ''
+                                          : ' ' + cls('rowSubWarn'))
+                  }
+                >
+                  {session.cwd === undefined
+                    ? ''
+                    : basenameOf(session.cwd) + ' · '}
+                  {shortIdOf(session.sessionId)}
+                  {' · '}
+                  {agoText(session.updatedAt, now, t)}
+                  {session.measured
+                    ? ''
+                    : ' · ' + t('unmeasured')}
+                </div>
               </div>
-            ))}
-          </div>
-        )
+              <MiniBar
+                buckets={session}
+                total={session.totalTokens}
+                t={t}
+              />
+              <span className={css.rowRate}>
+                {formatPercent(session.cacheRate)}
+              </span>
+              <span className={css.rowTokens}>
+                {compactTokens(session.totalTokens)}
+              </span>
+              <span className={css.rowCalls}>
+                {session.calls}
+              </span>
+            </div>
+          ))}
+        </div>
       )}
       <div className={css.rowSub} style={{ marginTop: 8 }}>
         {t('cacheRate') + ' · ' + t('calls')}
