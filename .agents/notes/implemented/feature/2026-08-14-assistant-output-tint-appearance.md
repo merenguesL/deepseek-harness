@@ -12,7 +12,7 @@ The assistant text output, thinking disclosure, and tool-call rows all sit on th
 
 ## Decision
 
-**The theme plugin owns the preference; the conversation plugin renders it.** `ui-theme`'s durable section gains `outputTint`, a CSS color string persisted through the existing settings scope (empty string disables; the [Host-backed preferences decision](../../../.agents/notes/implemented/bug-fix/2026-08-06-host-backed-web-preferences.md) owns that boundary).
+**The theme plugin owns the preference; the conversation plugin renders it.** `ui-theme`'s durable section gains `outputTint`, a CSS color string persisted through the existing settings scope (empty string disables; the [Host-backed preferences decision](../bug-fix/2026-08-06-host-backed-web-preferences.md) owns that boundary).
 
 ## Alternatives considered
 

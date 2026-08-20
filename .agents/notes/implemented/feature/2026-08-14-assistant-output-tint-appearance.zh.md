@@ -12,7 +12,7 @@ Status: implemented
 
 ## 决策
 
-**主题插件拥有该偏好，会话插件负责渲染。** `ui-theme` 的持久化 section 新增 `outputTint`，一个通过既有 settings scope 持久化的 CSS 颜色字符串（空字符串表示关闭；该边界由 [Host settings 支撑的偏好决策](../../../.agents/notes/implemented/bug-fix/2026-08-06-host-backed-web-preferences.md) 拥有）。
+**主题插件拥有该偏好，会话插件负责渲染。** `ui-theme` 的持久化 section 新增 `outputTint`，一个通过既有 settings scope 持久化的 CSS 颜色字符串（空字符串表示关闭；该边界由 [Host settings 支撑的偏好决策](../bug-fix/2026-08-06-host-backed-web-preferences.md) 拥有）。
 
 ## 曾考虑的替代方案
 

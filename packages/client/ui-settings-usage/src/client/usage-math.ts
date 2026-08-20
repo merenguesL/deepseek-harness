@@ -7,20 +7,33 @@
 
 import type { UsageDayBucket, UsageTokenBuckets } from './report-types.ts'
 
+/** Time grain used by the usage trend and comparison views. */
 export type Granularity = 'day' | 'week' | 'month'
 
-/** Sum of all four disjoint token buckets. */
+/**
+ * Sum all four disjoint token buckets.
+ * @param buckets - token counts to add.
+ * @returns total input, output, cache-read, and cache-write tokens.
+ */
 export function totalTokensOf(buckets: Pick<UsageTokenBuckets, 'uncachedInputTokens' | 'outputTokens' | 'cacheReadTokens' | 'cacheWriteTokens'>): number {
   return buckets.uncachedInputTokens + buckets.outputTokens
     + buckets.cacheReadTokens + buckets.cacheWriteTokens
 }
 
-/** Prompt-side traffic; the cache-rate denominator. */
+/**
+ * Sum prompt-side traffic used as the cache-rate denominator.
+ * @param buckets - uncached input, cache-read, and cache-write counts.
+ * @returns prompt-side token count.
+ */
 export function promptTokensOf(buckets: Pick<UsageTokenBuckets, 'uncachedInputTokens' | 'cacheReadTokens' | 'cacheWriteTokens'>): number {
   return buckets.uncachedInputTokens + buckets.cacheReadTokens + buckets.cacheWriteTokens
 }
 
-/** Cache-read share of prompt traffic; 0 before any prompt token. */
+/**
+ * Calculate the cache-read share of prompt traffic.
+ * @param buckets - token counts for one usage bucket.
+ * @returns cache-read ratio, or zero before any prompt token.
+ */
 export function cacheRateOf(buckets: UsageTokenBuckets): number {
   const prompt = promptTokensOf(buckets)
   return prompt === 0 ? 0 : buckets.cacheReadTokens / prompt
@@ -38,26 +51,43 @@ export interface RolledBucket extends UsageTokenBuckets {
 
 const pad = (value: number): string => String(value).padStart(2, '0')
 
-/** Local calendar day key of one instant. */
+/**
+ * Return the local calendar day key of one instant.
+ * @param ms - instant as epoch milliseconds.
+ * @returns a `YYYY-MM-DD` local date key.
+ */
 export function dayKeyOf(ms: number): string {
   const date = new Date(ms)
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
 }
 
-/** Local calendar day key shifted by a signed day count. */
+/**
+ * Shift a local calendar day key by a signed day count.
+ * @param day - starting `YYYY-MM-DD` local date key.
+ * @param delta - number of days to add or subtract.
+ * @returns the shifted local date key.
+ */
 export function addDays(day: string, delta: number): string {
   const date = new Date(day + 'T00:00:00')
   date.setDate(date.getDate() + delta)
   return dayKeyOf(date.getTime())
 }
 
-/** The Monday of the week containing `day` (local calendar). */
+/**
+ * Return the Monday of the week containing a local date.
+ * @param day - local `YYYY-MM-DD` date key.
+ * @returns the week's Monday as a local date key.
+ */
 export function weekStartOf(day: string): string {
   const weekday = new Date(day + 'T00:00:00').getDay()
   return addDays(day, weekday === 0 ? -6 : 1 - weekday)
 }
 
-/** Month key 'YYYY-MM' of a day key. */
+/**
+ * Return the month key of a local date.
+ * @param day - local `YYYY-MM-DD` date key.
+ * @returns the `YYYY-MM` month key.
+ */
 export function monthKeyOf(day: string): string {
   return day.slice(0, 7)
 }
@@ -108,8 +138,10 @@ export function rollup(series: readonly UsageDayBucket[], granularity: Granulari
 }
 
 /**
- * 7-day trailing average of a bucket's total, aligned with the bucket list;
- * the first six entries carry null (fewer than seven days of context).
+ * Calculate a trailing average aligned with the bucket list.
+ * @param buckets - ascending rolled buckets.
+ * @param window - number of buckets in each average window.
+ * @returns one average per bucket, with null until a full window exists.
  */
 export function trailingAverage(buckets: readonly RolledBucket[], window = 7): Array<number | null> {
   return buckets.map((_, index) => {
@@ -120,9 +152,10 @@ export function trailingAverage(buckets: readonly RolledBucket[], window = 7): A
 }
 
 /**
- * Period-over-period delta: the trailing N buckets against the N before
- * them (days 7, weeks 4, months 3). Null when fewer than 2N buckets exist
- * or the previous period is all zeros.
+ * Compare the trailing period with the preceding period.
+ * @param buckets - ascending rolled buckets.
+ * @param granularity - grain selecting the comparison window.
+ * @returns current total, previous total, and relative delta, or null when the comparison is unavailable.
  */
 export function periodDelta(
   buckets: readonly RolledBucket[],
@@ -138,7 +171,11 @@ export function periodDelta(
   return { current, previous, delta: (current - previous) / previous }
 }
 
-/** Index of the highest-total bucket (first when tied). */
+/**
+ * Find the first bucket with the highest total.
+ * @param buckets - rolled buckets to inspect.
+ * @returns the highest-total bucket index.
+ */
 export function peakIndexOf(buckets: readonly RolledBucket[]): number {
   let peak = 0
   let peakTotal = -1
@@ -151,14 +188,20 @@ export function peakIndexOf(buckets: readonly RolledBucket[]): number {
   return peak
 }
 
-/** Short axis label of a rolled bucket key: '08-12' for days and weeks, '2026-08' for months. */
+/**
+ * Format a rolled bucket key for a short chart axis label.
+ * @param key - rolled bucket key.
+ * @param granularity - grain of the key.
+ * @returns a short month, day, or week label.
+ */
 export function bucketKeyLabel(key: string, granularity: Granularity): string {
   return granularity === 'month' ? key : key.slice(5)
 }
 
 /**
- * Compact token count for card labels: 1.23M, 45.6k, 980. One decimal, no
- * trailing zero; sub-thousand values render as whole numbers.
+ * Compact a token count for card labels.
+ * @param value - token count.
+ * @returns a compact count using B, M, or k suffixes where appropriate.
  */
 export function compactTokens(value: number): string {
   if (value >= 1_000_000_000) return trim(value / 1_000_000_000) + 'B'
@@ -172,19 +215,30 @@ const trim = (value: number): string => {
   return Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1)
 }
 
-/** Full token count with thousands separators (tooltips and tables). */
+/**
+ * Format a token count with thousands separators.
+ * @param value - token count.
+ * @returns the localized full count.
+ */
 export function formatTokens(value: number): string {
   return new Intl.NumberFormat('en-US').format(value)
 }
 
-/** Percent display of a 0..1 ratio, one decimal (100% for 1). */
+/**
+ * Format a ratio as a percentage.
+ * @param ratio - ratio in the range 0..1.
+ * @param digits - number of fractional digits.
+ * @returns the percentage string.
+ */
 export function formatPercent(ratio: number, digits = 1): string {
   return `${(ratio * 100).toFixed(digits)}%`
 }
 
 /**
- * Relative recency of one instant for list rows: minutes/hours/days up to a
- * month, then null (the caller falls back to an absolute date).
+ * Express one instant's recency for a list row.
+ * @param ms - instant as epoch milliseconds.
+ * @param now - comparison instant as epoch milliseconds.
+ * @returns a minute, hour, or day value up to one month, otherwise null.
  */
 export function relativeAgo(ms: number, now: number): { value: number; unit: 'minute' | 'hour' | 'day' } | null {
   const minutes = Math.max(0, Math.floor((now - ms) / 60_000))

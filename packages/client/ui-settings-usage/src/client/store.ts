@@ -22,6 +22,7 @@ export interface UsageState {
  * @param api - the wire face the section reads.
  */
 export class UsageStore {
+  /** Snapshot of the current loading state and latest report. */
   readonly store: SnapshotStore<UsageState>
   private generation = 0
 
