@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import type { UsageDayBucket } from '../src/client/report-types.ts'
+import type {
+  UsageDayBucket,
+  UsageDescribeValue,
+  UsageSessionRow,
+  UsageTotals,
+} from '../src/client/report-types.ts'
 import {
   addDays,
   bucketKeyLabel,
@@ -20,6 +25,17 @@ import {
   trailingAverage,
   trendRangeDays,
   weekStartOf,
+  busiestCellOf,
+  busiestDayOf,
+  cacheRateSeriesOf,
+  contextFillOf,
+  dayBucketOf,
+  insightsOf,
+  peakIndexOfMetric,
+  streakOf,
+  subagentShareOf,
+  toSessionsCsv,
+  trailingMetricAverage,
 } from '../src/client/usage-math.ts'
 
 const day = (
@@ -252,5 +268,292 @@ describe('formatting', () => {
     })
     expect(relativeAgo(now - 31 * 86_400_000, now)).toBeNull()
     expect(relativeAgo(now + 5_000, now)).toEqual({ value: 0, unit: 'minute' })
+  })
+})
+
+describe('context and recency math', () => {
+  it('derives context fill from the occupancy projection value', () => {
+    expect(
+      contextFillOf({ pressureTokens: 150, projectedTokens: 160, contextWindow: 200 }),
+    ).toBeCloseTo(0.8)
+    expect(
+      contextFillOf({ pressureTokens: 50, projectedTokens: null, contextWindow: 200 }),
+    ).toBeCloseTo(0.25)
+    expect(
+      contextFillOf({ pressureTokens: 50, projectedTokens: null, contextWindow: null }),
+    ).toBeNull()
+  })
+
+  it('returns a zero fill when the occupancy value carries no numerator', () => {
+    expect(
+      contextFillOf({ pressureTokens: null, projectedTokens: null, contextWindow: 200 }),
+    ).toBe(0)
+  })
+
+  it('counts the unbroken recent daily streak across today gaps', () => {
+    const now = Date.parse('2026-07-14T10:00:00')
+    const today = dayKeyOf(now)
+    const yesterday = addDays(today, -1)
+    const before = addDays(today, -2)
+    // Today active: the streak counts today plus yesterday's run.
+    expect(streakOf([day(before), day(yesterday), day(today)], now)).toBe(3)
+    // Today empty but yesterday alive: the run survives.
+    expect(streakOf([day(before), day(yesterday)], now)).toBe(2)
+    // A gap before yesterday breaks the run.
+    expect(streakOf([day(before)], now)).toBe(0)
+  })
+
+  it('finds the busiest day and heatmap cell', () => {
+    const series = [day('2026-07-01', 100), day('2026-07-02', 900), day('2026-07-03', 300)]
+    expect(busiestDayOf(series)).toMatchObject({ day: '2026-07-02', totalTokens: 900 })
+    expect(busiestDayOf([])).toBeNull()
+    const cells = Array.from({ length: 24 }, () => Array.from({ length: 7 }, () => 0))
+    cells[21]![2] = 500
+    expect(busiestCellOf(cells)).toEqual({ hour: 21, weekday: 2, tokens: 500 })
+    expect(
+      busiestCellOf(Array.from({ length: 24 }, () => Array.from({ length: 7 }, () => 0))),
+    ).toBeNull()
+  })
+
+  it('derives the subagent share and reads one day bucket', () => {
+    const zero: UsageTotals = {
+      uncachedInputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      totalTokens: 0,
+      promptTokens: 0,
+      cacheRate: 0,
+      calls: 0,
+      sessions: 0,
+      measuredSessions: 0,
+      turns: 0,
+      steps: 0,
+      llmMs: 0,
+      firstActivityAt: null,
+      lastActivityAt: null,
+      subagentTokens: 0,
+      subagentSessions: 0,
+      activeDays: 0,
+      contextSessions: 0,
+      nearLimitSessions: 0,
+    }
+    expect(subagentShareOf(zero)).toBe(0)
+    expect(
+      subagentShareOf({ ...zero, totalTokens: 200, subagentTokens: 50 }),
+    ).toBeCloseTo(0.25)
+    const series = [day('2026-07-01', 100), day('2026-07-02', 200)]
+    expect(dayBucketOf(series, '2026-07-02')).toMatchObject({ totalTokens: 200 })
+    expect(dayBucketOf(series, '2026-07-09')).toBeNull()
+  })
+
+  it('marks buckets without prompt traffic as rateless', () => {
+    const empty = rollup([day('2026-07-01', 0, {
+      uncachedInputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    })], 'day')
+    expect(cacheRateSeriesOf(empty)).toEqual([null])
+  })
+
+  it('computes per-bucket cache rates and metric peaks', () => {
+    const buckets = rollup(
+      [
+        day('2026-07-01', 100),
+        day('2026-07-02', 300, { outputTokens: 40, cacheWriteTokens: 0 }),
+      ],
+      'day',
+    )
+    const rates = cacheRateSeriesOf(buckets)
+    expect(rates[0]).toBeCloseTo(0.75)
+    expect(rates[1]).toBeCloseTo(60 / 70)
+    expect(peakIndexOfMetric(buckets, bucket => bucket.outputTokens)).toBe(1)
+    const averages = trailingMetricAverage(
+      buckets,
+      bucket => bucket.outputTokens,
+      1,
+    )
+    expect(averages[0]).toBeCloseTo(buckets[0]!.outputTokens)
+    expect(averages[1]).toBeCloseTo(buckets[1]!.outputTokens)
+  })
+
+  it('localizes compact token units for zh', () => {
+    expect(compactTokens(950_000, 'zh')).toBe('95万')
+    expect(compactTokens(9_500, 'zh')).toBe('9500')
+    expect(compactTokens(123_456_789, 'zh')).toBe('1.2亿')
+    expect(compactTokens(9_499, 'zh')).toBe('9499')
+    // Non-zh languages keep the k/M/B units.
+    expect(compactTokens(9_500, 'en')).toBe('9.5k')
+  })
+})
+
+describe('insights', () => {
+  const weekdayLabels = ['一', '二', '三', '四', '五', '六', '日']
+  const totals = (overrides: Partial<UsageTotals> = {}): UsageTotals => ({
+    uncachedInputTokens: 200,
+    outputTokens: 100,
+    cacheReadTokens: 600,
+    cacheWriteTokens: 100,
+    totalTokens: 1000,
+    promptTokens: 900,
+    cacheRate: 600 / 900,
+    calls: 2,
+    sessions: 2,
+    measuredSessions: 2,
+    turns: 0,
+    steps: 0,
+    llmMs: 0,
+    firstActivityAt: 1,
+    lastActivityAt: 2,
+    subagentTokens: 0,
+    subagentSessions: 0,
+    activeDays: 2,
+    contextSessions: 0,
+    nearLimitSessions: 0,
+    ...overrides,
+  })
+
+  it('stays empty for a report without prompt traffic or history', () => {
+    const value: UsageDescribeValue = {
+      totals: totals({ promptTokens: 0, cacheRate: 0 }),
+      series: [],
+      bySession: [],
+      byWorkspace: [],
+      heatmap: Array.from({ length: 24 }, () => Array.from({ length: 7 }, () => 0)),
+      heatmapCalls: Array.from({ length: 24 }, () => Array.from({ length: 7 }, () => 0)),
+      contextTotals: { systemTokens: 0, toolsTokens: 0, messageTokens: 0, sessions: 0 },
+      generatedAt: 0,
+    }
+    expect(insightsOf(value, weekdayLabels, Date.parse('2026-08-12T12:00:00'))).toEqual([])
+  })
+
+  it('flags a low cache rate, a rising week, near-limit sessions, and the peak hour', () => {
+    const now = Date.parse('2026-08-12T12:00:00')
+    const keys = Array.from({ length: 14 }, (_, index) => addDays(dayKeyOf(now), index - 13))
+    const value: UsageDescribeValue = {
+      totals: totals({
+        cacheRate: 0.1,
+        nearLimitSessions: 1,
+        subagentTokens: 500,
+        subagentSessions: 1,
+      }),
+      // Rising series: the trailing week doubles the previous one.
+      series: keys.map((key, index) => day(key, 100 + index * 100)),
+      bySession: [],
+      byWorkspace: [],
+      // Wednesday (2026-08-12) 21:00 carries the densest cell.
+      heatmap: Array.from({ length: 24 }, (_, hour) =>
+        Array.from({ length: 7 }, (_, weekday) =>
+          hour === 21 && weekday === 3 ? 500 : 0),
+      ),
+      heatmapCalls: Array.from({ length: 24 }, () => Array.from({ length: 7 }, () => 0)),
+      contextTotals: { systemTokens: 0, toolsTokens: 0, messageTokens: 0, sessions: 0 },
+      generatedAt: now,
+    }
+    const insights = insightsOf(value, weekdayLabels, now)
+    expect(insights.map(insight => insight.key)).toEqual([
+      'insightCacheLow',
+      'insightWeekUp',
+      'insightNearLimit',
+      'insightSubagent',
+      'insightPeakHour',
+    ])
+    expect(insights.every(insight => insight.tone !== undefined)).toBe(true)
+    expect(insights[2]!.params).toEqual({ n: '1', pct: '80%' })
+    expect(insights[4]!.params).toEqual({ weekday: '三', hour: '21' })
+  })
+
+  it('flags a falling week', () => {
+    const now = Date.parse('2026-08-12T12:00:00')
+    const keys = Array.from({ length: 14 }, (_, index) => addDays(dayKeyOf(now), index - 13))
+    const value: UsageDescribeValue = {
+      totals: totals({ cacheRate: 0.4 }),
+      series: keys.map((key, index) => day(key, 10_000 - index * 500)),
+      bySession: [],
+      byWorkspace: [],
+      heatmap: Array.from({ length: 24 }, () => Array.from({ length: 7 }, () => 0)),
+      heatmapCalls: Array.from({ length: 24 }, () => Array.from({ length: 7 }, () => 0)),
+      contextTotals: { systemTokens: 0, toolsTokens: 0, messageTokens: 0, sessions: 0 },
+      generatedAt: now,
+    }
+    const insights = insightsOf(value, weekdayLabels, now)
+    expect(insights.some(insight => insight.key === 'insightWeekDown')).toBe(true)
+  })
+
+  it('caps the insight list at five findings', () => {
+    const now = Date.parse('2026-08-12T12:00:00')
+    const keys = Array.from({ length: 14 }, (_, index) => addDays(dayKeyOf(now), index - 13))
+    const cells = Array.from({ length: 24 }, (_, hour) =>
+      Array.from({ length: 7 }, (_, weekday) =>
+        hour === 8 && weekday === 2 ? 500 : 0),
+    )
+    const value: UsageDescribeValue = {
+      totals: totals({ cacheRate: 0.05, nearLimitSessions: 3, subagentTokens: 500 }),
+      series: keys.map((key, index) => day(key, 100 + index * 100)),
+      bySession: [],
+      byWorkspace: [],
+      heatmap: cells,
+      heatmapCalls: Array.from({ length: 24 }, () => Array.from({ length: 7 }, () => 0)),
+      contextTotals: { systemTokens: 0, toolsTokens: 0, messageTokens: 0, sessions: 0 },
+      generatedAt: now,
+    }
+    expect(insightsOf(value, weekdayLabels, now)).toHaveLength(5)
+  })
+})
+
+describe('CSV serialization', () => {
+  it('serializes session rows as RFC 4180 CSV with a header', () => {
+    const row: UsageSessionRow = {
+      sessionId: 's1' as UsageSessionRow['sessionId'],
+      title: 'Alpha, Beta',
+      cwd: '/tmp/x',
+      origin: 'subagent',
+      agentPreset: 'coder',
+      createdAt: 1,
+      updatedAt: Date.parse('2026-08-12T08:09:10Z'),
+      uncachedInputTokens: 10,
+      outputTokens: 20,
+      cacheReadTokens: 30,
+      cacheWriteTokens: 40,
+      totalTokens: 100,
+      cacheRate: 0.5,
+      calls: 1,
+      turns: 0,
+      steps: 0,
+      measured: true,
+      asOfSeq: 3,
+      running: false,
+      contextPressure: null,
+      contextBreakdown: null,
+    }
+    const csv = toSessionsCsv([row])
+    expect(csv.startsWith('sessionId,title,cwd,origin,agentPreset,')).toBe(true)
+    expect(csv).toContain('"Alpha, Beta",/tmp/x,subagent,coder,10,20,30,40,100,0.5000,1,1,2026-08-12T08:09:10.000Z')
+    expect(csv.endsWith('\r\n')).toBe(true)
+  })
+
+  it('doubles embedded quotes and leaves simple fields bare', () => {
+    const row: UsageSessionRow = {
+      sessionId: 's2' as UsageSessionRow['sessionId'],
+      title: 'say "hi"',
+      createdAt: 1,
+      updatedAt: 2,
+      uncachedInputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      totalTokens: 0,
+      cacheRate: 0,
+      calls: 0,
+      turns: 0,
+      steps: 0,
+      measured: false,
+      asOfSeq: null,
+      running: false,
+      contextPressure: null,
+      contextBreakdown: null,
+    }
+    expect(toSessionsCsv([row])).toContain('"say ""hi""",,,')
   })
 })

@@ -177,3 +177,142 @@ describe('buildUsageReport', () => {
     expect(value.bySession[0]?.asOfSeq).toBe(0)
   })
 })
+
+describe('extended projection consumption', () => {
+  function richSession(
+    id: string,
+    updatedAt: number,
+    values: Record<string, unknown>,
+    extra: Partial<SessionSummary> = {},
+  ): SessionSummary {
+    return {
+      sessionId: id as SessionSummary['sessionId'],
+      updatedAt,
+      running: false,
+      blank: false,
+      projections: { asOfSeq: 7, values },
+      ...extra,
+    }
+  }
+
+  it('consumes title, context, origin, running, and preset fields from the rows', () => {
+    const at = new Date(2026, 7, 14, 10, 0).getTime()
+    const value = buildUsageReport(
+      [
+        richSession(
+          'rich',
+          at,
+          {
+            tokenUsage: {
+              uncachedInputTokens: 100,
+              outputTokens: 50,
+              cacheReadTokens: 300,
+              cacheWriteTokens: 50,
+            },
+            title: '重构登录',
+            contextPressure: {
+              pressureTokens: 150_000,
+              projectedTokens: 170_000,
+              contextWindow: 200_000,
+            },
+            contextBreakdown: { systemTokens: 4_000, toolsTokens: 6_000, messageTokens: 10_000 },
+          },
+          { origin: 'subagent', agentPreset: 'coder', running: true, cwd: '/work/app' },
+        ),
+        richSession('plain', at, {}),
+      ],
+      1234,
+    )
+
+    const rich = value.bySession.find(row => String(row.sessionId) === 'rich')!
+    expect(rich.title).toBe('重构登录')
+    expect(rich.origin).toBe('subagent')
+    expect(rich.agentPreset).toBe('coder')
+    expect(rich.running).toBe(true)
+    expect(rich.contextPressure).toEqual({
+      pressureTokens: 150_000,
+      projectedTokens: 170_000,
+      contextWindow: 200_000,
+    })
+    expect(rich.contextBreakdown).toEqual({
+      systemTokens: 4_000,
+      toolsTokens: 6_000,
+      messageTokens: 10_000,
+    })
+    const plain = value.bySession.find(row => String(row.sessionId) === 'plain')!
+    expect(plain.title).toBeNull()
+    expect(plain.contextPressure).toBeNull()
+    expect(plain.contextBreakdown).toBeNull()
+    expect(plain.running).toBe(false)
+
+    expect(value.totals).toMatchObject({
+      subagentTokens: rich.totalTokens,
+      subagentSessions: 1,
+      activeDays: 1,
+      contextSessions: 1,
+      nearLimitSessions: 1,
+    })
+    expect(value.contextTotals).toEqual({
+      systemTokens: 4_000,
+      toolsTokens: 6_000,
+      messageTokens: 10_000,
+      sessions: 1,
+    })
+  })
+
+  it('normalizes malformed context values without inventing windows', () => {
+    const value = buildUsageReport(
+      [
+        richSession('bad', 1, {
+          contextPressure: { pressureTokens: -5, projectedTokens: 1.9, contextWindow: 0 },
+          contextBreakdown: { systemTokens: Number.NaN, toolsTokens: 2.7, messageTokens: 3 },
+        }),
+      ],
+      2,
+    )
+    const row = value.bySession[0]!
+    expect(row.contextPressure).toEqual({
+      pressureTokens: 0,
+      projectedTokens: 1,
+      contextWindow: null,
+    })
+    expect(row.contextBreakdown).toEqual({ systemTokens: 0, toolsTokens: 2, messageTokens: 3 })
+    expect(value.totals.contextSessions).toBe(0)
+    expect(value.totals.nearLimitSessions).toBe(0)
+  })
+
+  it('defaults absent occupancy fields to null without a window', () => {
+    const value = buildUsageReport(
+      [richSession('partial', 1, { contextPressure: { contextWindow: 100 } })],
+      2,
+    )
+    expect(value.bySession[0]!.contextPressure).toEqual({
+      pressureTokens: null,
+      projectedTokens: null,
+      contextWindow: 100,
+    })
+  })
+
+  it('counts near-limit sessions on the projected share of the window', () => {
+    const at = 1
+    const value = buildUsageReport(
+      [
+        richSession('hot', at, {
+          contextPressure: { pressureTokens: 90, projectedTokens: 95, contextWindow: 100 },
+        }),
+        richSession('warm', at, {
+          contextPressure: { pressureTokens: 79, projectedTokens: null, contextWindow: 100 },
+        }),
+        richSession('pressure-hot', at, {
+          contextPressure: { pressureTokens: 95, contextWindow: 100 },
+        }),
+        richSession('empty-pressure', at, {
+          contextPressure: { contextWindow: 100 },
+        }),
+      ],
+      2,
+    )
+    expect(value.totals.contextSessions).toBe(4)
+    expect(value.totals.nearLimitSessions).toBe(2)
+  })
+})

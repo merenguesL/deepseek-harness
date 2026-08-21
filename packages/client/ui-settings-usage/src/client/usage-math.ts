@@ -1,17 +1,31 @@
 /**
  * Pure dashboard math for the usage section: token rollups across day, week,
  * and month granularities, trend figures (moving average, period deltas),
- * trailing range windows, and display formatting. All functions are pure and
- * locale-free; copy lives in locales.ts, colors in the stylesheet.
+ * trailing range windows, per-bucket cache rates, context occupancy, insight
+ * selection, CSV serialization, and display formatting. All functions are
+ * pure and locale-free except where a language id picks numeral units; copy
+ * lives in locales.ts, colors in the stylesheet.
  */
 
-import type { UsageDayBucket, UsageTokenBuckets } from './report-types.ts'
+import type {
+  UsageContextPressure,
+  UsageDayBucket,
+  UsageDescribeValue,
+  UsageHeatmap,
+  UsageInsight,
+  UsageSessionRow,
+  UsageTokenBuckets,
+  UsageTotals,
+} from './report-types.ts'
 
 /** Time grain used by the usage trend and comparison views. */
 export type Granularity = 'day' | 'week' | 'month'
 
 /** Trailing-window preset of the trend range filter. */
 export type TrendRange = 'all' | 7 | 30 | 90
+
+/** Projected-context share at or above which a session counts as near limit. */
+export const NEAR_LIMIT_SHARE = 0.8
 
 /**
  * Sharpen one {@link TrendRange} preset into its day count.
@@ -91,7 +105,7 @@ export function totalTokensOf(
 export function promptTokensOf(
   buckets: Pick<
     UsageTokenBuckets,
-  'uncachedInputTokens' | 'cacheReadTokens' | 'cacheWriteTokens'
+    'uncachedInputTokens' | 'cacheReadTokens' | 'cacheWriteTokens'
   >,
 ): number {
   return (
@@ -109,6 +123,96 @@ export function promptTokensOf(
 export function cacheRateOf(buckets: UsageTokenBuckets): number {
   const prompt = promptTokensOf(buckets)
   return prompt === 0 ? 0 : buckets.cacheReadTokens / prompt
+}
+
+/**
+ * Calculate one session's projected context fill from its occupancy value.
+ * @param pressure - the session's contextPressure projection value.
+ * @returns the projected share of the context window, or null without a
+ * window denominator.
+ */
+export function contextFillOf(pressure: UsageContextPressure): number | null {
+  if (pressure.contextWindow === null || pressure.contextWindow === 0) return null
+  const projected = pressure.projectedTokens ?? pressure.pressureTokens ?? 0
+  return projected / pressure.contextWindow
+}
+
+/**
+ * Count length of the unbroken recent daily-activity run.
+ * @param series - ascending local-day buckets from the plugin report.
+ * @param now - comparison instant as epoch milliseconds, injectable for
+ * deterministic tests.
+ * @returns consecutive active days ending today or yesterday.
+ */
+export function streakOf(
+  series: readonly UsageDayBucket[],
+  now = Date.now(),
+): number {
+  const active = new Set(series.filter(bucket => bucket.totalTokens > 0).map(bucket => bucket.day))
+  let cursor = dayKeyOf(now)
+  // A streak counted "today" may legitimately start yesterday: an empty
+  // today must not erase a run that is still alive through yesterday.
+  if (!active.has(cursor)) cursor = addDays(cursor, -1)
+  let streak = 0
+  while (active.has(cursor)) {
+    streak += 1
+    cursor = addDays(cursor, -1)
+  }
+  return streak
+}
+
+/**
+ * Find the highest-total day bucket.
+ * @param series - ascending local-day buckets from the plugin report.
+ * @returns the peak bucket, or null for an empty series.
+ */
+export function busiestDayOf(
+  series: readonly UsageDayBucket[],
+): UsageDayBucket | null {
+  let best: UsageDayBucket | null = null
+  for (const bucket of series) {
+    if (best === null || bucket.totalTokens > best.totalTokens) best = bucket
+  }
+  return best
+}
+
+/**
+ * Find the densest heatmap cell (server indexing: weekday 0 = Sunday).
+ * @param heatmap - 24 local hours by weekday.
+ * @returns the peak cell, or null when every cell is empty.
+ */
+export function busiestCellOf(
+  heatmap: UsageHeatmap,
+): { hour: number; weekday: number; tokens: number } | null {
+  let best: { hour: number; weekday: number; tokens: number } | null = null
+  for (const [hour, cells] of heatmap.entries()) {
+    for (const [weekday, tokens] of cells.entries()) {
+      if (best === null || tokens > best.tokens) best = { hour, weekday, tokens }
+    }
+  }
+  return best !== null && best.tokens > 0 ? best : null
+}
+
+/**
+ * Calculate the subagent-origin share of reported tokens.
+ * @param totals - whole-report totals.
+ * @returns subagent tokens over total tokens, or zero before any token.
+ */
+export function subagentShareOf(totals: UsageTotals): number {
+  return totals.totalTokens === 0 ? 0 : totals.subagentTokens / totals.totalTokens
+}
+
+/**
+ * Read one local-day bucket out of the series.
+ * @param series - ascending local-day buckets from the plugin report.
+ * @param day - local `YYYY-MM-DD` day key.
+ * @returns the bucket for that day, or null when the day had no activity.
+ */
+export function dayBucketOf(
+  series: readonly UsageDayBucket[],
+  day: string,
+): UsageDayBucket | null {
+  return series.find(bucket => bucket.day === day) ?? null
 }
 
 /** One rolled-up time bucket the series chart draws. */
@@ -239,6 +343,25 @@ export function trailingAverage(
 }
 
 /**
+ * Calculate a trailing average over one picked metric of the bucket list.
+ * @param buckets - ascending rolled buckets.
+ * @param pick - metric of a bucket to average.
+ * @param window - number of buckets in each average window.
+ * @returns one average per bucket, with null until a full window exists.
+ */
+export function trailingMetricAverage(
+  buckets: readonly RolledBucket[],
+  pick: (bucket: RolledBucket) => number,
+  window = 7,
+): Array<number | null> {
+  return buckets.map((_, index) => {
+    if (index < window - 1) return null
+    const windowed = buckets.slice(index - window + 1, index + 1)
+    return windowed.reduce((total, bucket) => total + pick(bucket), 0) / window
+  })
+}
+
+/**
  * Compare the trailing period with the preceding period.
  * @param buckets - ascending rolled buckets.
  * @param granularity - grain selecting the comparison window.
@@ -278,6 +401,42 @@ export function peakIndexOf(buckets: readonly RolledBucket[]): number {
 }
 
 /**
+ * Find the first bucket with the highest value of one picked metric.
+ * @param buckets - rolled buckets to inspect.
+ * @param pick - metric of a bucket to compare.
+ * @returns the highest-metric bucket index.
+ */
+export function peakIndexOfMetric(
+  buckets: readonly RolledBucket[],
+  pick: (bucket: RolledBucket) => number,
+): number {
+  let peak = 0
+  let peakValue = -1
+  buckets.forEach((bucket, index) => {
+    const value = pick(bucket)
+    if (value > peakValue) {
+      peak = index
+      peakValue = value
+    }
+  })
+  return peak
+}
+
+/**
+ * Calculate the per-bucket cache-read share of prompt traffic.
+ * @param buckets - rolled buckets to inspect.
+ * @returns one ratio per bucket, null where the bucket saw no prompt tokens.
+ */
+export function cacheRateSeriesOf(
+  buckets: readonly RolledBucket[],
+): Array<number | null> {
+  return buckets.map((bucket) => {
+    const prompt = promptTokensOf(bucket)
+    return prompt === 0 ? null : bucket.cacheReadTokens / prompt
+  })
+}
+
+/**
  * Format a rolled bucket key for a short chart axis label.
  * @param key - rolled bucket key.
  * @param granularity - grain of the key.
@@ -290,9 +449,15 @@ export function bucketKeyLabel(key: string, granularity: Granularity): string {
 /**
  * Compact a token count for card labels.
  * @param value - token count.
- * @returns a compact count using B, M, or k suffixes where appropriate.
+ * @param language - active UI language id; `zh` switches to 万/亿 units.
+ * @returns a compact count using 亿/万 (zh) or B, M, k suffixes otherwise.
  */
-export function compactTokens(value: number): string {
+export function compactTokens(value: number, language?: string): string {
+  if (language === 'zh') {
+    if (value >= 100_000_000) return trim(value / 100_000_000) + '亿'
+    if (value >= 10_000) return trim(value / 10_000) + '万'
+    return String(Math.round(value))
+  }
   if (value >= 1_000_000_000) return trim(value / 1_000_000_000) + 'B'
   if (value >= 1_000_000) return trim(value / 1_000_000) + 'M'
   if (value >= 1_000) return trim(value / 1_000) + 'k'
@@ -340,4 +505,154 @@ export function relativeAgo(
   const days = Math.floor(hours / 24)
   if (days < 30) return { value: days, unit: 'day' }
   return null
+}
+
+/** Cap on the auto-generated insight list. */
+const INSIGHT_LIMIT = 5
+
+/** Week-over-week delta above which the change reads as a rise. */
+const DELTA_EPSILON = 0.0005
+
+/** Subagent share at or above which the split reads as notable. */
+const SUBAGENT_SHARE_NOTABLE = 0.3
+
+/** Cache-read share at or above which the hit rate reads as healthy. */
+const CACHE_RATE_GOOD = 0.6
+
+/** Cache-read share at or below which the hit rate reads as low. */
+const CACHE_RATE_LOW = 0.2
+
+/**
+ * Select the dashboard's auto-generated findings from one ready report.
+ * Every rule is independent; the list keeps a fixed presentation order and
+ * is capped at {@link INSIGHT_LIMIT} entries.
+ * @param value - the ready report.
+ * @param weekdayLabels - Monday-first weekday labels in display order.
+ * @param now - comparison instant as epoch milliseconds, injectable for
+ * deterministic tests.
+ * @returns the selected insights.
+ */
+export function insightsOf(
+  value: UsageDescribeValue,
+  weekdayLabels: readonly string[],
+  now = Date.now(),
+): UsageInsight[] {
+  const { totals } = value
+  const insights: UsageInsight[] = []
+  if (totals.promptTokens > 0) {
+    if (totals.cacheRate >= CACHE_RATE_GOOD) {
+      insights.push({
+        tone: 'good',
+        key: 'insightCacheGood',
+        params: { rate: formatPercent(totals.cacheRate, 0) },
+      })
+    } else if (totals.cacheRate <= CACHE_RATE_LOW) {
+      insights.push({
+        tone: 'info',
+        key: 'insightCacheLow',
+        params: { rate: formatPercent(totals.cacheRate, 0) },
+      })
+    }
+  }
+  const delta = periodDelta(rollup(filterRangeSeries(value.series, 'all', now), 'day'), 'day')
+  if (delta !== null) {
+    if (delta.delta > DELTA_EPSILON) {
+      insights.push({
+        tone: 'warn',
+        key: 'insightWeekUp',
+        params: { delta: formatPercent(delta.delta, 0) },
+      })
+    } else if (delta.delta < -DELTA_EPSILON) {
+      insights.push({
+        tone: 'good',
+        key: 'insightWeekDown',
+        params: { delta: formatPercent(-delta.delta, 0) },
+      })
+    }
+  }
+  if (totals.nearLimitSessions > 0) {
+    insights.push({
+      tone: 'warn',
+      key: 'insightNearLimit',
+      params: {
+        n: String(totals.nearLimitSessions),
+        pct: formatPercent(NEAR_LIMIT_SHARE, 0),
+      },
+    })
+  }
+  const share = subagentShareOf(totals)
+  if (share >= SUBAGENT_SHARE_NOTABLE) {
+    insights.push({
+      tone: 'info',
+      key: 'insightSubagent',
+      params: { share: formatPercent(share, 0) },
+    })
+  }
+  const cell = busiestCellOf(value.heatmap)
+  if (cell !== null) {
+    // Server cells index weekday 0 = Sunday; display labels are Monday-first.
+    // Exactly seven labels ship in both dictionaries; the fallback only
+    // satisfies the indexed-access type.
+    /* v8 ignore next 2 -- see above */
+    const label = weekdayLabels[(cell.weekday + 6) % 7] ?? ''
+    insights.push({
+      tone: 'info',
+      key: 'insightPeakHour',
+      params: { weekday: label, hour: String(cell.hour) },
+    })
+  }
+  return insights.slice(0, INSIGHT_LIMIT)
+}
+
+/** Escape one CSV field: quotes doubled, the value wrapped when needed. */
+function csvField(value: string): string {
+  return value.includes('"') || value.includes(',') || value.includes('\n') || value.includes('\r')
+    ? `"${value.replaceAll('"', '""')}"`
+    : value
+}
+
+/** Session-detail CSV header, fixed column order. */
+const SESSION_CSV_HEADER = [
+  'sessionId',
+  'title',
+  'cwd',
+  'origin',
+  'agentPreset',
+  'uncachedInputTokens',
+  'outputTokens',
+  'cacheReadTokens',
+  'cacheWriteTokens',
+  'totalTokens',
+  'cacheRate',
+  'calls',
+  'measured',
+  'updatedAt',
+] as const
+
+/**
+ * Serialize the session breakdown as RFC 4180 CSV for spreadsheet analysis.
+ * @param rows - the report's session rows (any order; written as given).
+ * @returns the complete CSV text with a header row, CRLF line endings.
+ */
+export function toSessionsCsv(rows: readonly UsageSessionRow[]): string {
+  const line = (fields: readonly string[]): string => fields.map(csvField).join(',')
+  const body = rows.map(row =>
+    line([
+      String(row.sessionId),
+      row.title ?? '',
+      row.cwd ?? '',
+      row.origin ?? '',
+      row.agentPreset ?? '',
+      String(row.uncachedInputTokens),
+      String(row.outputTokens),
+      String(row.cacheReadTokens),
+      String(row.cacheWriteTokens),
+      String(row.totalTokens),
+      row.cacheRate.toFixed(4),
+      String(row.calls),
+      row.measured ? '1' : '0',
+      new Date(row.updatedAt).toISOString(),
+    ]),
+  )
+  return [line([...SESSION_CSV_HEADER]), ...body].join('\r\n') + '\r\n'
 }

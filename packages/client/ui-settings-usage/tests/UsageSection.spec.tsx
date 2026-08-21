@@ -1,7 +1,10 @@
 // @vitest-environment jsdom
-/** Usage dashboard behavior: loading, error, empty, and ready states; hover
- *  tooltips on the single bars and trend chart; the day/week/month toggle;
- *  the heatmap; and the workspace/session breakdown tabs. */
+/** Usage dashboard behavior: loading (skeleton), error, empty, and ready
+ *  states; hover tooltips on the single bars and trend chart; the
+ *  granularity / range / metric toggles; the heatmap with its peak cell;
+ *  insights; CSV export; auto refresh; the context panel; and the
+ *  workspace/session breakdown tabs with filter, sort, badges, and the
+ *  jump-to-session affordance. */
 import {
   act,
   cleanup,
@@ -14,9 +17,11 @@ import {
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { bindSnapshotSelector } from '@deepseek-ai/dsh-client-test-runtime'
 import type {
+  UsageContextTotals,
   UsageDescribeValue,
   UsageDayBucket,
   UsageHeatmap,
+  UsageHeatmapCalls,
   UsageResponse,
   UsageSessionRow,
   UsageWorkspaceRow,
@@ -32,14 +37,26 @@ import {
   CompositionBar,
   SeriesChart,
 } from '../src/client/charts.tsx'
+import { Breakdown } from '../src/client/breakdown.tsx'
 import { Heatmap } from '../src/client/heatmap.tsx'
 import type { UsageSectionInjected } from '../src/client/UsageSection.tsx'
 import { UsageStore } from '../src/client/store.ts'
+import type { SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
+import type { LocaleSnapshot } from '@deepseek-ai/dsh-client-locale/client'
 import { zh } from '../src/client/locales.ts'
 
 afterEach(cleanup)
 
-const t: UsageSectionInjected['t'] = key => zh[key]
+const t: UsageSectionInjected['t'] = (key, params) => {
+  const template = zh[key]
+  if (params === undefined) return template
+  return template.replace(/\{(\w+)\}/g, (match, name: string) =>
+    name in params ? String(params[name]) : match)
+}
+
+/** Locale-face stub over the real snapshot shape: a fixed active language. */
+const useLocale = <S,>(selector: (snapshot: LocaleSnapshot) => S): S =>
+  selector({ active: 'zh', locales: [{ id: 'zh', label: '中文' }], revision: 0 })
 
 const sid = (id: string): SessionId => id as SessionId
 
@@ -93,6 +110,9 @@ function sessionRow(overrides: Partial<UsageSessionRow> = {}): UsageSessionRow {
     steps: 9,
     measured: true,
     asOfSeq: 5,
+    running: false,
+    contextPressure: null,
+    contextBreakdown: null,
     ...overrides,
   }
 }
@@ -122,6 +142,19 @@ function heatmap(): UsageHeatmap {
   )
 }
 
+function heatmapCalls(): UsageHeatmapCalls {
+  return Array.from({ length: 24 }, (_, hour) =>
+    Array.from({ length: 7 }, () => (hour >= 9 && hour <= 11 ? 4 : 0)),
+  )
+}
+
+const CONTEXT_TOTALS: UsageContextTotals = {
+  systemTokens: 4_000,
+  toolsTokens: 6_000,
+  messageTokens: 10_000,
+  sessions: 2,
+}
+
 function report(
   overrides: Partial<UsageDescribeValue> = {},
 ): UsageDescribeValue {
@@ -144,6 +177,11 @@ function report(
       llmMs: 1_000_000,
       firstActivityAt: 1,
       lastActivityAt: 2,
+      subagentTokens: 0,
+      subagentSessions: 0,
+      activeDays: 14,
+      contextSessions: 0,
+      nearLimitSessions: 0,
     },
     series,
     bySession: [
@@ -193,6 +231,8 @@ function report(
       }),
     ],
     heatmap: heatmap(),
+    heatmapCalls: heatmapCalls(),
+    contextTotals: CONTEXT_TOTALS,
     generatedAt: Date.parse('2026-07-14T12:00:00Z'),
     ...overrides,
   }
@@ -207,13 +247,25 @@ function apiWith(value: UsageDescribeValue | (() => Promise<never>)) {
   }
 }
 
-async function mountReady(overrides: Partial<UsageDescribeValue> = {}) {
+interface MountExtras {
+  useLocale?: SnapshotSelectorHook<LocaleSnapshot>
+  openSession?: (sessionId: SessionId) => void
+  close?: () => void
+}
+
+async function mountReady(
+  overrides: Partial<UsageDescribeValue> = {},
+  extras: MountExtras = {},
+) {
   const store = new UsageStore(apiWith(report(overrides)))
   render(
     <UsageSection
       controller={store}
       useSnapshot={bindSnapshotSelector(store.store)}
       t={t}
+      {...(extras.useLocale === undefined ? {} : { useLocale: extras.useLocale })}
+      {...(extras.openSession === undefined ? {} : { openSession: extras.openSession })}
+      {...(extras.close === undefined ? {} : { close: extras.close })}
     />,
   )
   await waitFor(() => {
@@ -223,7 +275,7 @@ async function mountReady(overrides: Partial<UsageDescribeValue> = {}) {
 }
 
 describe('UsageSection states', () => {
-  it('shows the loading state until the first report lands', async () => {
+  it('shows the skeleton until the first report lands', async () => {
     const store = new UsageStore(apiWith(report()))
     render(
       <UsageSection
@@ -233,9 +285,11 @@ describe('UsageSection states', () => {
       />,
     )
     expect(screen.getByText(zh.loading)).toBeTruthy()
+    expect(document.querySelector('[class*="skeletonLine"]')).toBeTruthy()
     await waitFor(() => {
       expect(screen.getByText(zh.title)).toBeTruthy()
     })
+    expect(screen.getByText('95k')).toBeTruthy()
   })
 
   it('shows the failure state with a working retry', async () => {
@@ -325,19 +379,168 @@ describe('UsageSection states', () => {
   it('renders nothing before the shell injects dependencies', () => {
     expect(UsageSection({})).toBeNull()
   })
+
+  it('silently reloads every 30 seconds while auto refresh is on', async () => {
+    let calls = 0
+    const store = new UsageStore({
+      describe: async (): Promise<UsageResponse> => {
+        calls += 1
+        return { result: { ok: true, value: report() } }
+      },
+    })
+    render(
+      <UsageSection
+        controller={store}
+        useSnapshot={bindSnapshotSelector(store.store)}
+        t={t}
+      />,
+    )
+    await waitFor(() => {
+      expect(screen.getByText(zh.title)).toBeTruthy()
+    })
+    expect(calls).toBe(1)
+    await act(async () => {
+      vi.useFakeTimers()
+    })
+    fireEvent.click(screen.getByTitle(zh.autoRefresh))
+    expect(
+      screen.getByTitle(zh.autoRefresh).getAttribute('aria-pressed'),
+    ).toBe('true')
+    await act(async () => {
+      vi.advanceTimersByTime(30_000)
+    })
+    expect(calls).toBe(2)
+    await act(async () => {
+      vi.advanceTimersByTime(30_000)
+    })
+    expect(calls).toBe(3)
+    // The loading chrome that follows a reset keeps the toggle on.
+    vi.useRealTimers()
+    store.reset()
+    await waitFor(() => {
+      expect(screen.getByTitle(zh.autoRefresh).getAttribute('aria-pressed')).toBe('true')
+    })
+    await waitFor(() => {
+      expect(screen.getByTitle(zh.autoRefresh).getAttribute('aria-pressed')).toBe('true')
+    })
+    vi.useRealTimers()
+  })
 })
 
 describe('UsageSection dashboard', () => {
   it('renders the stat cards with compact values and full sub-lines', async () => {
     await mountReady()
     expect(screen.getByText('95k')).toBeTruthy()
-    expect(screen.getByText('95,000')).toBeTruthy()
+    expect(screen.getByText('95,000 · ↑54% 近 7 天')).toBeTruthy()
     expect(screen.getByText('60k')).toBeTruthy()
-    expect(screen.getByText(zh.cacheRate)).toBeTruthy()
+    expect(screen.getAllByText(zh.cacheRate).length).toBeGreaterThan(0)
     expect(screen.getAllByText('70.6%').length).toBeGreaterThan(0)
     expect(screen.getByText('300')).toBeTruthy()
-    expect(screen.getByText(`${zh.turns}: 40`)).toBeTruthy()
-    expect(screen.getByText(`${zh.steps}: 70`)).toBeTruthy()
+    expect(screen.getByText(zh.measuredSub.replace('{n}', '2').replace('{total}', '2'))).toBeTruthy()
+    expect(screen.getByText('14')).toBeTruthy()
+    expect(screen.getAllByText('0.0%').length).toBeGreaterThan(0)
+  })
+
+  it('localizes compact card values for the zh locale', async () => {
+    await mountReady({}, { useLocale })
+    expect(screen.getByText('9.5万')).toBeTruthy()
+    expect(screen.getByText('6万')).toBeTruthy()
+  })
+
+  it('shows falling and flat week deltas on the total card', async () => {
+    const falling = DAY_KEYS.map((key, index) => day(key, 10_000 - index * 500))
+    await mountReady({ series: falling })
+    expect(screen.getByText(/95,000 · ↓/)).toBeTruthy()
+    cleanup()
+    const flat = DAY_KEYS.map(key => day(key, 10_000))
+    await mountReady({ series: flat })
+    expect(screen.getByText('95,000 · ' + zh.deltaFlat)).toBeTruthy()
+  })
+
+  it('renders today and last-7-days cards from the series', async () => {
+    await mountReady()
+    expect(screen.getByText(zh.today)).toBeTruthy()
+    expect(screen.getByText('2.3k')).toBeTruthy()
+    expect(screen.getAllByText(zh.last7Days).length).toBeGreaterThan(0)
+    expect(screen.getByText('14k')).toBeTruthy()
+  })
+
+  it('shows the no-usage-yet sub-line on an empty today card', async () => {
+    await mountReady({ series: [] })
+    expect(screen.getByText(zh.todayNone)).toBeTruthy()
+  })
+
+  it('renders auto-generated insights with severity dots', async () => {
+    await mountReady()
+    expect(screen.getByText(zh.insightTitle)).toBeTruthy()
+    expect(screen.getByText(zh.insightCacheGood.replace('{rate}', '71%'))).toBeTruthy()
+    expect(screen.getByText(zh.insightWeekUp.replace('{delta}', '54%'))).toBeTruthy()
+    expect(
+      screen.getByText(
+        zh.insightPeakHour.replace('{weekday}', '日').replace('{hour}', '9'),
+      ),
+    ).toBeTruthy()
+  })
+
+  it('renders the near-limit and subagent insights for the flagged report', async () => {
+    await mountReady({
+      totals: {
+        ...report().totals,
+        nearLimitSessions: 2,
+        subagentTokens: 47_500,
+        subagentSessions: 1,
+      },
+    })
+    expect(
+      screen.getByText(
+        zh.insightNearLimit.replace('{n}', '2').replace('{pct}', '80%'),
+      ),
+    ).toBeTruthy()
+    expect(screen.getByText(zh.insightSubagent.replace('{share}', '50%'))).toBeTruthy()
+  })
+
+  it('exports the session breakdown as CSV', async () => {
+    const created: Blob[] = []
+    const revoked: string[] = []
+    ;(URL as unknown as Record<string, unknown>).createObjectURL = (blob: Blob) => {
+      created.push(blob)
+      return 'blob:mock'
+    }
+    ;(URL as unknown as Record<string, unknown>).revokeObjectURL = (url: string) => {
+      revoked.push(url)
+    }
+    // oxlint-disable-next-line typescript/unbound-method -- saving the native method so the stub can restore it
+    const nativeClick = HTMLAnchorElement.prototype.click
+    HTMLAnchorElement.prototype.click = (): void => {}
+    await mountReady()
+    vi.useFakeTimers()
+    fireEvent.click(screen.getByLabelText(zh.exportCsv))
+    await act(async () => {})
+    expect(created).toHaveLength(1)
+    expect(revoked).toEqual(['blob:mock'])
+    expect(screen.getByText(zh.copied)).toBeTruthy()
+    await act(async () => {
+      vi.advanceTimersByTime(2000)
+    })
+    expect(screen.getByLabelText(zh.exportCsv)).toBeTruthy()
+    vi.useRealTimers()
+    HTMLAnchorElement.prototype.click = nativeClick
+    const text = await created[0]!.text()
+    expect(text.startsWith('sessionId,title,cwd')).toBe(true)
+    expect(text).toContain('Alpha,/tmp/fixture')
+    expect(text.endsWith('\r\n')).toBe(true)
+    Reflect.deleteProperty(URL, 'createObjectURL')
+    Reflect.deleteProperty(URL, 'revokeObjectURL')
+  })
+
+  it('reports a missing download URL API as an export failure', async () => {
+    Reflect.deleteProperty(URL, 'createObjectURL')
+    Reflect.deleteProperty(URL, 'revokeObjectURL')
+    await mountReady()
+    fireEvent.click(screen.getByLabelText(zh.exportCsv))
+    await waitFor(() => {
+      expect(screen.getByText(zh.exportFailed)).toBeTruthy()
+    })
   })
 
   it('refreshes on demand and updates the freshness stamp', async () => {
@@ -406,6 +609,36 @@ describe('UsageSection dashboard', () => {
     expect(screen.queryByRole('tooltip')).toBeNull()
   })
 
+  it('renders the heuristic context composition bar with legend and hover', async () => {
+    await mountReady()
+    expect(screen.getByText(zh.contextPanel)).toBeTruthy()
+    expect(screen.getByText(zh.contextSystem)).toBeTruthy()
+    expect(screen.getByText(zh.contextTools)).toBeTruthy()
+    expect(screen.getByText(zh.contextMessages)).toBeTruthy()
+    expect(screen.getByText(zh.contextSessions.replace('{n}', '2'))).toBeTruthy()
+    const segmentDiv = screen
+      .getByText(zh.contextSystem)
+      .closest('div')!
+      .parentElement!.querySelector('[class*="segment"]')!
+    fireEvent.mouseEnter(segmentDiv)
+    const tooltip = screen.getByRole('tooltip')
+    expect(within(tooltip).getByText(/4,000/)).toBeTruthy()
+    fireEvent.mouseLeave(segmentDiv)
+    const legend = screen.getAllByText(zh.contextTools).at(-1)!
+    fireEvent.mouseEnter(legend)
+    expect(screen.getByRole('tooltip')).toBeTruthy()
+    fireEvent.mouseLeave(legend)
+    expect(screen.queryByRole('tooltip')).toBeNull()
+    expect(screen.queryByRole('tooltip')).toBeNull()
+  })
+
+  it('shows the context panel empty hint without estimates', async () => {
+    await mountReady({
+      contextTotals: { systemTokens: 0, toolsTokens: 0, messageTokens: 0, sessions: 0 },
+    })
+    expect(screen.getByText(zh.contextEmpty)).toBeTruthy()
+  })
+
   it('switches the trend granularity and shows the delta chip', async () => {
     await mountReady()
     expect(
@@ -429,6 +662,26 @@ describe('UsageSection dashboard', () => {
     // exists, so the delta chip shows for the day granularity.
     fireEvent.click(screen.getByRole('tab', { name: zh.granularityDay }))
     expect(screen.getByText(zh.peak)).toBeTruthy()
+  })
+
+  it('switches the trend metric to output and cache hit rate', async () => {
+    render(<SeriesChart series={DAY_KEYS.map((key, index) => day(key, 1_000 + index * 100))} t={t} />)
+    const svgLabel = (): string | null =>
+      document.querySelector('[role="img"]')!.getAttribute('aria-label')
+    expect(svgLabel()).toBe(zh.trend + ' · ' + zh.metricTotal)
+    fireEvent.click(screen.getByRole('radio', { name: zh.metricOutput }))
+    expect(svgLabel()).toBe(zh.trend + ' · ' + zh.metricOutput)
+    expect(screen.getByText(zh.peak)).toBeTruthy()
+    fireEvent.click(screen.getByRole('radio', { name: zh.metricRate }))
+    expect(svgLabel()).toBe(zh.trend + ' · ' + zh.metricRate)
+    expect(screen.getByText('100%')).toBeTruthy()
+    expect(screen.getByText(zh.trendRateHint.replace('{unit}', zh.granularityDay))).toBeTruthy()
+    expect(screen.queryByText(zh.peak)).toBeNull()
+    // Hovering a rate point shows the hit-rate row above the bucket rows.
+    const overlay = document.querySelector('[role="img"] rect[fill="transparent"]')!
+    fireEvent.mouseEnter(overlay)
+    expect(screen.getAllByText(zh.metricRate).length).toBeGreaterThan(0)
+    fireEvent.mouseLeave(overlay)
   })
 
   it('shows falling and flat period deltas', () => {
@@ -474,7 +727,7 @@ describe('UsageSection dashboard', () => {
   it('shows the hover tooltip over a trend bar', async () => {
     await mountReady()
     const svg = document.querySelector(
-      `[role="img"][aria-label="${zh.trend}"]`,
+      '[role="img"][aria-label^="' + zh.trend + '"]',
     )!
     // The transparent overlay rect per bucket is the hover target; the first
     // one belongs to the first (leftmost) day.
@@ -484,17 +737,18 @@ describe('UsageSection dashboard', () => {
     fireEvent.mouseLeave(overlay)
     expect(screen.queryByText('2026-07-01')).toBeNull()
   })
-
-  it('shows the heatmap with tooltip and the empty heatmap hint', async () => {
+  it('shows the heatmap with tooltip, calls row, and the peak caption', async () => {
     await mountReady()
     expect(screen.getByText(zh.heatmapHigh)).toBeTruthy()
-    const cell = screen
-      .getAllByRole('button', { hidden: false })
-      .find(button => button.className.includes('cellHot'))!
+    expect(screen.getByText(zh.heatmapPeak.replace('{weekday}', '日').replace('{hour}', '9'))).toBeTruthy()
+    const cell = document.querySelector('[class*="cellPeak"]') as HTMLButtonElement
+    expect(cell).toBeTruthy()
+    expect(cell.className.includes('cellHot')).toBe(true)
     fireEvent.mouseEnter(cell)
     await waitFor(() => {
       expect(screen.getAllByText(/30,000/).length).toBeGreaterThan(0)
     })
+    expect(within(screen.getByRole('tooltip')).getByText(zh.calls)).toBeTruthy()
     fireEvent.mouseLeave(cell)
     await waitFor(() => {
       expect(screen.queryByRole('tooltip')).toBeNull()
@@ -516,6 +770,9 @@ describe('UsageSection dashboard', () => {
       heatmap: Array.from({ length: 24 }, () =>
         Array.from({ length: 7 }, () => 0),
       ),
+      heatmapCalls: Array.from({ length: 24 }, () =>
+        Array.from({ length: 7 }, () => 0),
+      ),
     })
     expect(screen.getByText(zh.heatmapEmpty)).toBeTruthy()
   })
@@ -524,7 +781,7 @@ describe('UsageSection dashboard', () => {
     await mountReady()
     expect(screen.getByText('fixture')).toBeTruthy()
     expect(screen.getByText(zh.unknownWorkspace)).toBeTruthy()
-    expect(screen.getByText(new RegExp(`${zh.sessions}: 2`))).toBeTruthy()
+    expect(screen.getByText(new RegExp(zh.sessions + ': 2'))).toBeTruthy()
     fireEvent.click(screen.getByRole('tab', { name: zh.bySession }))
     expect(screen.getByText('Alpha')).toBeTruthy()
     expect(screen.getByText(zh.untitledSession)).toBeTruthy()
@@ -537,6 +794,135 @@ describe('UsageSection dashboard', () => {
     expect(screen.getByText(zh.noSessions)).toBeTruthy()
   })
 
+  it('filters sessions by the search box and reports misses', async () => {
+    await mountReady()
+    fireEvent.click(screen.getByRole('tab', { name: zh.bySession }))
+    const box = screen.getByPlaceholderText(zh.searchPlaceholder)
+    fireEvent.change(box, { target: { value: 'Alpha' } })
+    expect(screen.getByText('Alpha')).toBeTruthy()
+    expect(screen.queryByText(zh.untitledSession)).toBeNull()
+    fireEvent.change(box, { target: { value: 'zzz-no-match' } })
+    expect(screen.getByText(zh.noMatch)).toBeTruthy()
+    fireEvent.change(box, { target: { value: '  ' } })
+    expect(screen.getByText('Alpha')).toBeTruthy()
+  })
+
+  it('sorts sessions by tokens or by recency', async () => {
+    const now = Date.now()
+    await mountReady({
+      bySession: [
+        sessionRow({
+          sessionId: sid('small'),
+          title: 'Small',
+          totalTokens: 100,
+          uncachedInputTokens: 100,
+          updatedAt: now - 3_600_000,
+        }),
+        sessionRow({
+          sessionId: sid('big'),
+          title: 'Big',
+          totalTokens: 900,
+          uncachedInputTokens: 900,
+          updatedAt: now - 7_200_000,
+        }),
+      ],
+    })
+    fireEvent.click(screen.getByRole('tab', { name: zh.bySession }))
+    const names = (): string[] =>
+      Array.from(document.querySelectorAll('[class*="rowName"]')).map(
+        node => node.textContent ?? '',
+      )
+    expect(names()[0]).toBe('Big')
+    fireEvent.click(screen.getByRole('radio', { name: zh.sortRecent }))
+    expect(names()[0]).toBe('Small')
+    fireEvent.click(screen.getByRole('radio', { name: zh.sortTokens }))
+    expect(names()[0]).toBe('Big')
+  })
+
+  it('shows subagent and running badges on session rows', async () => {
+    await mountReady({
+      bySession: [
+        sessionRow({
+          sessionId: sid('child'),
+          title: '子任务',
+          origin: 'subagent',
+          running: true,
+        }),
+      ],
+    })
+    fireEvent.click(screen.getByRole('tab', { name: zh.bySession }))
+    expect(screen.getByText(zh.subagentBadge)).toBeTruthy()
+    expect(screen.getByText(zh.runningBadge)).toBeTruthy()
+  })
+
+  it('shows the agent preset fragment when the row records one', async () => {
+    await mountReady({
+      bySession: [sessionRow({ sessionId: sid('preset'), title: '预设', agentPreset: 'coder' })],
+    })
+    fireEvent.click(screen.getByRole('tab', { name: zh.bySession }))
+    expect(screen.getByText(/coder/)).toBeTruthy()
+  })
+
+  it('shows the context-occupancy meter and warns near the window limit', async () => {
+    await mountReady({
+      bySession: [
+        sessionRow({
+          sessionId: sid('full'),
+          title: '接近上限',
+          contextPressure: {
+            pressureTokens: 150_000,
+            projectedTokens: 160_000,
+            contextWindow: 200_000,
+          },
+        }),
+        sessionRow({
+          sessionId: sid('mid'),
+          title: '健康',
+          contextPressure: {
+            pressureTokens: 50_000,
+            projectedTokens: null,
+            contextWindow: 200_000,
+          },
+        }),
+        sessionRow({
+          sessionId: sid('nowin'),
+          title: '无窗口',
+          contextPressure: {
+            pressureTokens: 1_000,
+            projectedTokens: null,
+            contextWindow: null,
+          },
+        }),
+      ],
+    })
+    fireEvent.click(screen.getByRole('tab', { name: zh.bySession }))
+    expect(screen.getByText('80%')).toBeTruthy()
+    expect(screen.getByText('25%')).toBeTruthy()
+    const dashes = screen.getAllByText('—')
+    expect(dashes.length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('opens the session and closes settings when a row is clicked', async () => {
+    const opened: SessionId[] = []
+    let closed = false
+    await mountReady({}, {
+      openSession: (id) => { opened.push(id) },
+      close: () => { closed = true },
+    })
+    fireEvent.click(screen.getByRole('tab', { name: zh.bySession }))
+    fireEvent.click(screen.getByText('Alpha'))
+    expect(opened).toEqual([sid('alpha')])
+    expect(closed).toBe(true)
+  })
+
+  it('renders session rows as plain rows without the sessions face', async () => {
+    await mountReady()
+    fireEvent.click(screen.getByRole('tab', { name: zh.bySession }))
+    const row = screen.getByText('Alpha').closest('button')!
+    expect(row.className.includes('rowClickable')).toBe(false)
+    fireEvent.click(row)
+  })
+
   it('shows the coverage note only when some sessions lack a projection', async () => {
     await mountReady({ totals: { ...report().totals, measuredSessions: 1 } })
     expect(screen.getByText(zh.coverageNote.replace('{n}', '1'))).toBeTruthy()
@@ -547,7 +933,6 @@ describe('UsageSection dashboard', () => {
     expect(screen.queryByText(zh.coverageNote.replace('{n}', '0'))).toBeNull()
     expect(screen.queryByText(zh.coverageNote.replace('{n}', '2'))).toBeNull()
   })
-
   it('filters the trend by trailing range and sums the visible series', () => {
     const now = Date.now()
     const recent = Array.from({ length: 14 }, (_, index) => {
@@ -560,8 +945,9 @@ describe('UsageSection dashboard', () => {
       )
     })
     render(<SeriesChart series={recent} t={t} />)
+    // Four range presets plus three metric options.
     const radios = screen.getAllByRole('radio')
-    expect(radios).toHaveLength(4)
+    expect(radios).toHaveLength(7)
     fireEvent.click(
       screen.getByRole('radio', { name: zh.rangeDays.replace('{days}', '7') }),
     )
@@ -570,14 +956,16 @@ describe('UsageSection dashboard', () => {
         .getByRole('radio', { name: zh.rangeDays.replace('{days}', '7') })
         .getAttribute('aria-checked'),
     ).toBe('true')
+    const escape = (text: string): string => text.replace(/[.*+?^`{}()|[\]\\]/g, '\\$&')
     expect(
       screen.getByText(
         new RegExp(
-          zh.rangeSummary
-            .replace('{days}', '7')
-            .replace('{tokens}', '7,000')
-            .replace('{calls}', '14')
-            .replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
+          escape(
+            zh.rangeSummary
+              .replace('{days}', '7')
+              .replace('{tokens}', '7,000')
+              .replace('{calls}', '14'),
+          ),
         ),
       ),
     ).toBeTruthy()
@@ -589,11 +977,12 @@ describe('UsageSection dashboard', () => {
     expect(
       screen.getByText(
         new RegExp(
-          zh.rangeSummary
-            .replace('{days}', '30')
-            .replace('{tokens}', '14,000')
-            .replace('{calls}', '28')
-            .replace(/[.*+?^${}()|[\]\\]/g, '\\$&'),
+          escape(
+            zh.rangeSummary
+              .replace('{days}', '30')
+              .replace('{tokens}', '14,000')
+              .replace('{calls}', '28'),
+          ),
         ),
       ),
     ).toBeTruthy()
@@ -712,6 +1101,7 @@ describe('UsageSection dashboard', () => {
     render(
       <Heatmap
         heatmap={heatmap()}
+        calls={heatmapCalls()}
         total={0}
         weekdayLabels={['一', '二', '三', '四', '五', '六', '日']}
         t={t}
@@ -723,6 +1113,43 @@ describe('UsageSection dashboard', () => {
     fireEvent.mouseEnter(cell)
     expect(screen.getByText(zh.shareOfTotal)).toBeTruthy()
     expect(screen.getByText('0.0%')).toBeTruthy()
+  })
+
+  it('shows minute and hour recency fragments in the session sub-line', async () => {
+    const now = Date.now()
+    await mountReady({
+      bySession: [
+        sessionRow({ sessionId: sid('min'), title: '分钟', updatedAt: now - 5 * 60_000 }),
+        sessionRow({ sessionId: sid('hour'), title: '小时', updatedAt: now - 3 * 3_600_000 }),
+      ],
+    })
+    fireEvent.click(screen.getByRole('tab', { name: zh.bySession }))
+    expect(screen.getByText(/5 分钟前/)).toBeTruthy()
+    expect(screen.getByText(/3 小时前/)).toBeTruthy()
+  })
+
+  it('shows a 0.0% share fragment for a zero-token workspace', async () => {
+    await mountReady({
+      byWorkspace: [workspaceRow({ path: '/z', sessions: 1, totalTokens: 0, cacheRate: 0, uncachedInputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, calls: 0 })],
+    })
+    expect(screen.getByText(/占总量 0.0%/)).toBeTruthy()
+  })
+
+  it('omits the workspace share fragment when the report total is zero', () => {
+    const zero = report({
+      byWorkspace: [workspaceRow({ path: '/z', sessions: 1 })],
+      totals: { ...report().totals, totalTokens: 0 },
+    })
+    render(<Breakdown value={zero} t={t} />)
+    expect(screen.queryByText(/占总量/)).toBeNull()
+  })
+
+  it('shows the just-now recency label for a session touched this minute', async () => {
+    await mountReady({
+      bySession: [sessionRow({ sessionId: sid('fresh'), title: '新鲜', updatedAt: Date.now() })],
+    })
+    fireEvent.click(screen.getByRole('tab', { name: zh.bySession }))
+    expect(screen.getByText(/刚刚/)).toBeTruthy()
   })
 })
 
@@ -799,18 +1226,18 @@ describe('UsageStore', () => {
     })
     const first = store.load()
     const second = store.load()
-    // The older call settles first; its result must be discarded.
-    settles[0]!({ result: { ok: true, value: report() } })
-    await act(async () => {
-      await first
+    settles[1]!({
+      result: { ok: true, value: report({ generatedAt: 2 }) },
     })
-    expect(store.store.getSnapshot().status).toBe('loading')
-    settles[1]!({ result: { ok: true, value: report() } })
     await act(async () => {
       await second
     })
-    expect(store.store.getSnapshot().status).toBe('ready')
+    settles[0]!({
+      result: { ok: true, value: report({ generatedAt: 1 }) },
+    })
+    await act(async () => {
+      await first
+    })
+    expect(store.store.getSnapshot().value?.generatedAt).toBe(2)
   })
 })
-
-void within

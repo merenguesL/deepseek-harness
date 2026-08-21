@@ -1,26 +1,30 @@
 /**
  * Chart building blocks of the usage section: the single stacked composition
  * bar with hover detail, the prompt cache-rate bar, and the SVG trend chart
- * (stacked buckets, 7-day trailing average, peak marker, hover tooltip, and
- * the day/week/month rollup toggle). All presentation; data arrives through
- * props, colors through CSS custom properties.
+ * (stacked buckets per metric, per-bucket cache-rate line, 7-day trailing
+ * average, peak marker, hover tooltip, and the granularity / range / metric
+ * toggles). All presentation; data arrives through props, colors through CSS
+ * custom properties.
  */
 
 import { useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { UsageTokenBuckets } from './report-types.ts'
+import type { UsageContextTotals, UsageTokenBuckets } from './report-types.ts'
 import {
   bucketKeyLabel,
+  cacheRateSeriesOf,
   compactTokens,
   filterRangeSeries,
   formatPercent,
   formatTokens,
-  peakIndexOf,
+  peakIndexOfMetric,
   periodDelta,
   rollup,
   seriesTotal,
   trailingAverage,
+  trailingMetricAverage,
   type Granularity,
+  type RolledBucket,
   type TrendRange,
 } from './usage-math.ts'
 import type { UsageDayBucket } from './report-types.ts'
@@ -30,7 +34,7 @@ import css from './UsageSection.module.css'
 /* v8 ignore next -- css-module lookups are static strings; the fallback satisfies the indexed-access type */
 const cls = (name: string): string => css[name] ?? ''
 
-type T = (key: UsageKey) => string
+type T = (key: UsageKey, params?: Record<string, unknown>) => string
 
 /** One tooltip row: colored dot, name, exact value, optional trailing text. */
 export interface TooltipRow {
@@ -324,15 +328,26 @@ function niceCeil(value: number): number {
   return 10 * power
 }
 
+/** The quantity the trend chart plots per bucket. */
+export type TrendMetric = 'total' | 'output' | 'rate'
+
+/** Read the plotted token quantity of one bucket (rate mode plots a ratio instead). */
+function metricValueOf(metric: TrendMetric, bucket: RolledBucket): number {
+  return metric === 'output' ? bucket.outputTokens : bucket.totalTokens
+}
+
 /**
- * The trend chart: stacked buckets per selected granularity with a 7-day
- * trailing average (day mode), the peak bucket marked, a trailing range
- * filter, and a hover tooltip per bar showing the exact breakdown.
+ * The trend chart: stacked buckets per selected granularity and metric, with
+ * a 7-day trailing average (token metrics in day mode), the peak bucket
+ * marked, a trailing range filter, and a hover tooltip per bar showing the
+ * exact breakdown. Rate mode plots the per-bucket cache hit rate as a line
+ * against a fixed 0-100% axis.
  */
 export function SeriesChart(props: SeriesChartProps): ReactNode {
   const { series, t } = props
   const [granularity, setGranularity] = useState<Granularity>('day')
   const [range, setRange] = useState<TrendRange>('all')
+  const [metric, setMetric] = useState<TrendMetric>('total')
   const [hovered, setHovered] = useState<number | null>(null)
   const visible = useMemo(
     () => filterRangeSeries(series, range),
@@ -342,27 +357,37 @@ export function SeriesChart(props: SeriesChartProps): ReactNode {
     () => rollup(visible, granularity),
     [visible, granularity],
   )
-  const averages = useMemo(
-    () =>
-      granularity === 'day'
-        ? trailingAverage(buckets)
-        : buckets.map(() => null),
-    [buckets, granularity],
+  const rates = useMemo(
+    () => (metric === 'rate' ? cacheRateSeriesOf(buckets) : buckets.map(() => null)),
+    [buckets, metric],
   )
+  const averages = useMemo(() => {
+    if (granularity !== 'day' || metric === 'rate') return buckets.map(() => null)
+    return metric === 'output'
+      ? trailingMetricAverage(buckets, bucket => bucket.outputTokens)
+      : trailingAverage(buckets)
+  }, [buckets, granularity, metric])
   const delta = useMemo(
-    () => periodDelta(buckets, granularity),
-    [buckets, granularity],
+    () => (metric === 'total' ? periodDelta(buckets, granularity) : null),
+    [buckets, granularity, metric],
   )
-  const peak = useMemo(() => peakIndexOf(buckets), [buckets])
+  const peak = useMemo(
+    () =>
+      metric === 'rate'
+        ? -1
+        : peakIndexOfMetric(buckets, bucket => metricValueOf(metric, bucket)),
+    [buckets, metric],
+  )
   const max = useMemo(() => {
+    if (metric === 'rate') return 1
     let highest = 0
     for (const bucket of buckets)
-      highest = Math.max(highest, bucket.totalTokens)
+      highest = Math.max(highest, metricValueOf(metric, bucket))
     for (const average of averages) {
       if (average !== null) highest = Math.max(highest, average)
     }
     return niceCeil(highest)
-  }, [buckets, averages])
+  }, [buckets, averages, metric])
 
   const slot = PLOT_WIDTH / Math.max(1, buckets.length)
   const barWidth = Math.max(2, slot * 0.66)
@@ -379,6 +404,17 @@ export function SeriesChart(props: SeriesChartProps): ReactNode {
     points.push(`${started ? 'L' : 'M'}${x},${yOf(average)}`)
     started = true
   })
+  const ratePoints: string[] = []
+  let rateStarted = false
+  rates.forEach((rate, index) => {
+    if (rate === null) {
+      rateStarted = false
+      return
+    }
+    const x = PAD_LEFT + slot * (index + 0.5)
+    ratePoints.push(`${rateStarted ? 'L' : 'M'}${x},${yOf(rate)}`)
+    rateStarted = true
+  })
 
   const granularityKey = (value: Granularity): UsageKey =>
     value === 'day'
@@ -386,11 +422,17 @@ export function SeriesChart(props: SeriesChartProps): ReactNode {
       : value === 'week'
         ? 'granularityWeek'
         : 'granularityMonth'
+  const metricKey = (value: TrendMetric): UsageKey =>
+    value === 'total'
+      ? 'metricTotal'
+      : value === 'output'
+        ? 'metricOutput'
+        : 'metricRate'
   const RANGES: readonly TrendRange[] = ['all', 7, 30, 90]
   const rangeKey = (value: TrendRange): string =>
     value === 'all'
       ? t('rangeAll')
-      : t('rangeDays').replace('{days}', String(value))
+      : t('rangeDays', { days: value })
 
   return (
     <>
@@ -451,23 +493,39 @@ export function SeriesChart(props: SeriesChartProps): ReactNode {
               }
             >
               {delta.delta > 0.0005
-                ? t('deltaUp').replace('{delta}', formatPercent(delta.delta, 0))
+                ? t('deltaUp', { delta: formatPercent(delta.delta, 0) })
                 : delta.delta < -0.0005
-                  ? t('deltaDown').replace(
-                    '{delta}',
-                    formatPercent(-delta.delta, 0),
-                  )
+                  ? t('deltaDown', { delta: formatPercent(-delta.delta, 0) })
                   : t('deltaFlat')}
             </span>
           </span>
         )}
+        <div className={css.toggle} role="radiogroup" aria-label={t('metric')}>
+          {(['total', 'output', 'rate'] as const).map(option => (
+            <button
+              key={option}
+              type="button"
+              role="radio"
+              aria-checked={metric === option}
+              className={
+                cls('toggleButton') +
+                (metric === option ? ' ' + cls('toggleButtonActive') : '')
+              }
+              onClick={() => {
+                setMetric(option)
+              }}
+            >
+              {t(metricKey(option))}
+            </button>
+          ))}
+        </div>
       </div>
       <div className={css.chart}>
         <svg
           className={css.chartSvg}
           viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
           role="img"
-          aria-label={t('trend')}
+          aria-label={t('trend') + ' · ' + t(metricKey(metric))}
         >
           {gridlines.map((fraction) => {
             const y = yOf(max * fraction)
@@ -486,50 +544,70 @@ export function SeriesChart(props: SeriesChartProps): ReactNode {
                   y={y + 3}
                   textAnchor="end"
                 >
-                  {compactTokens(max * fraction)}
+                  {metric === 'rate'
+                    ? formatPercent(max * fraction, 0)
+                    : compactTokens(max * fraction)}
                 </text>
               </g>
             )
           })}
-          {buckets.map((bucket, index) => {
-            const x = PAD_LEFT + slot * index
-            const left = x + (slot - barWidth) / 2
-            let offset = 0
-            return (
-              <g
+          {metric !== 'rate' &&
+            buckets.map((bucket, index) => {
+              const x = PAD_LEFT + slot * index
+              const left = x + (slot - barWidth) / 2
+              let offset = 0
+              return (
+                <g
+                  key={bucket.key}
+                  onMouseEnter={() => {
+                    setHovered(index)
+                  }}
+                  onMouseLeave={() => {
+                    setHovered(null)
+                  }}
+                >
+                  {SEGMENTS.map((segment) => {
+                    const height = (bucket[segment.key] / max) * PLOT_HEIGHT
+                    const rect = (
+                      <rect
+                        key={segment.key}
+                        x={left}
+                        y={yOf(offset + bucket[segment.key])}
+                        width={barWidth}
+                        height={Math.max(0, height)}
+                        fill={segment.color}
+                      />
+                    )
+                    offset += bucket[segment.key]
+                    return rect
+                  })}
+                  <rect
+                    x={x}
+                    y={PAD_TOP}
+                    width={slot}
+                    height={PLOT_HEIGHT}
+                    fill="transparent"
+                  />
+                </g>
+              )
+            })}
+          {metric === 'rate' &&
+            buckets.map((bucket, index) => (
+              <rect
                 key={bucket.key}
+                x={PAD_LEFT + slot * index}
+                y={PAD_TOP}
+                width={slot}
+                height={PLOT_HEIGHT}
+                fill="transparent"
                 onMouseEnter={() => {
                   setHovered(index)
                 }}
                 onMouseLeave={() => {
                   setHovered(null)
                 }}
-              >
-                {SEGMENTS.map((segment) => {
-                  const height = (bucket[segment.key] / max) * PLOT_HEIGHT
-                  const rect = (
-                    <rect
-                      key={segment.key}
-                      x={left}
-                      y={yOf(offset + bucket[segment.key])}
-                      width={barWidth}
-                      height={Math.max(0, height)}
-                      fill={segment.color}
-                    />
-                  )
-                  offset += bucket[segment.key]
-                  return rect
-                })}
-                <rect
-                  x={x}
-                  y={PAD_TOP}
-                  width={slot}
-                  height={PLOT_HEIGHT}
-                  fill="transparent"
-                />
-              </g>
-            )
-          })}
+              />
+            ))}
           {granularity === 'day' && points.length > 0 && (
             <>
               <path
@@ -539,23 +617,27 @@ export function SeriesChart(props: SeriesChartProps): ReactNode {
               <path className={css.maLine} d={points.join(' ')} />
             </>
           )}
+          {metric === 'rate' && ratePoints.length > 0 && (
+            <path className={css.rateLine} d={ratePoints.join(' ')} />
+          )}
           {(() => {
             const peakBucket = buckets[peak]
-            /* v8 ignore next -- the block only renders when buckets is non-empty */
+            /* v8 ignore next -- peak is -1 in rate mode and an existing index otherwise */
             if (peakBucket === undefined) return null
+            const peakValue = metricValueOf(metric, peakBucket)
             const peakX = PAD_LEFT + slot * (peak + 0.5)
             return (
               <g>
                 <circle
                   className={css.peakMarker}
                   cx={peakX}
-                  cy={yOf(peakBucket.totalTokens)}
+                  cy={yOf(peakValue)}
                   r={3}
                 />
                 <text
                   className={css.peakLabel}
                   x={peakX}
-                  y={yOf(peakBucket.totalTokens) - 7}
+                  y={yOf(peakValue) - 7}
                   textAnchor="middle"
                 >
                   {t('peak')}
@@ -582,10 +664,20 @@ export function SeriesChart(props: SeriesChartProps): ReactNode {
             const bucket = buckets[hovered]
             /* v8 ignore next -- hovered indexes an existing bucket */
             if (bucket === undefined) return null
+            const rate = rates[hovered]
+            const rateRow: TooltipRow | null =
+              metric === 'rate' && rate !== null && rate !== undefined
+                ? {
+                  name: t('metricRate'),
+                  value: formatPercent(rate),
+                  color: 'var(--usage-cache-read)',
+                }
+                : null
             return (
               <ChartTooltip
                 title={bucket.key}
                 rows={[
+                  ...(rateRow === null ? [] : [rateRow]),
                   ...bucketRows(bucket, t, bucket.totalTokens),
                   {
                     name: t('totalTokens'),
@@ -612,16 +704,121 @@ export function SeriesChart(props: SeriesChartProps): ReactNode {
           const sum = seriesTotal(visible)
           return (
             <p className={css.rangeSummary}>
-              {t('rangeSummary')
-                .replace('{days}', String(range))
-                .replace('{tokens}', formatTokens(sum.tokens))
-                .replace('{calls}', String(sum.calls))}
+              {t('rangeSummary', {
+                days: range,
+                tokens: formatTokens(sum.tokens),
+                calls: sum.calls,
+              })}
             </p>
           )
         })()}
       <p className={css.panelHint}>
-        {t('trendHint').replace('{unit}', t(granularityKey(granularity)))}
+        {metric === 'rate'
+          ? t('trendRateHint', { unit: t(granularityKey(granularity)) })
+          : t('trendHint', { unit: t(granularityKey(granularity)) })}
       </p>
     </>
+  )
+}
+
+interface ContextBarProps {
+  totals: UsageContextTotals
+  t: T
+}
+
+/** Display segments of the heuristic context composition, in stack order. */
+/* v8 ignore next 3 -- css-module lookups are static strings; the fallbacks satisfy the indexed-access type */
+const CONTEXT_SEGMENTS: readonly { key: keyof UsageContextTotals; labelKey: UsageKey; color: string; colorClass: string }[] = [
+  { key: 'systemTokens', labelKey: 'contextSystem', color: 'var(--usage-input)', colorClass: css.segInput ?? '' },
+  { key: 'toolsTokens', labelKey: 'contextTools', color: 'var(--usage-cache-write)', colorClass: css.segCacheWrite ?? '' },
+  { key: 'messageTokens', labelKey: 'contextMessages', color: 'var(--usage-output)', colorClass: css.segOutput ?? '' },
+]
+
+/**
+ * The heuristic context-composition bar: system prompt, tool schemas, and
+ * conversation tokens summed over sessions that carry the estimator value,
+ * each segment sized by share with exact numbers on hover.
+ */
+export function ContextBar(props: ContextBarProps): ReactNode {
+  const { totals, t } = props
+  const [hovered, setHovered] = useState<number | null>(null)
+  const total = totals.systemTokens + totals.toolsTokens + totals.messageTokens
+  if (totals.sessions === 0 || total === 0) {
+    return <p className={css.panelHint}>{t('contextEmpty')}</p>
+  }
+  let cursor = 0
+  const segments = CONTEXT_SEGMENTS.map((segment, index) => {
+    const value = totals[segment.key]
+    const width = (value / total) * 100
+    const start = cursor
+    cursor += width
+    return { ...segment, index, width, start, value }
+  })
+  return (
+    <div className={css.composition}>
+      <div className={css.bar}>
+        {segments.map(segment => (
+          <div
+            key={segment.key}
+            className={cls('segment') + ' ' + segment.colorClass}
+            style={{ width: `${segment.width}%` }}
+            onMouseEnter={() => {
+              setHovered(segment.index)
+            }}
+            onMouseLeave={() => {
+              setHovered(null)
+            }}
+          />
+        ))}
+      </div>
+      <div className={css.legend}>
+        {segments.map(segment => (
+          <span
+            key={segment.key}
+            className={css.legendItem}
+            onMouseEnter={() => {
+              setHovered(segment.index)
+            }}
+            onMouseLeave={() => {
+              setHovered(null)
+            }}
+          >
+            <span className={css.swatch} style={{ background: segment.color }} />
+            {t(segment.labelKey)}
+            <span className={css.legendPercent}>{formatPercent(segment.width / 100)}</span>
+          </span>
+        ))}
+      </div>
+      <p className={css.panelHint}>{t('contextSessions', { n: totals.sessions })}</p>
+      {hovered !== null &&
+        (() => {
+          const hoveredSegment = segments[hovered]
+          /* v8 ignore next -- hovered is a segment index, so the lookup always lands */
+          if (hoveredSegment === undefined) return null
+          return (
+            <ChartTooltip
+              title={t('contextPanel')}
+              rows={segments.map(segment =>
+                segment.index === hovered
+                  ? {
+                    name: t(segment.labelKey),
+                    value: formatTokens(segment.value),
+                    color: segment.color,
+                  }
+                  : {
+                    name: t(segment.labelKey),
+                    value: formatTokens(segment.value),
+                    color: segment.color,
+                    trailing: formatPercent(segment.width / 100),
+                  })}
+              style={{
+                left: `clamp(8%, ${hoveredSegment.start + hoveredSegment.width / 2}%, 92%)`,
+                top: 26,
+                transform: 'translateX(-50%)',
+              }}
+            />
+          )
+        })()}
+    </div>
   )
 }

@@ -728,3 +728,263 @@
 .primaryButton:hover {
  background: var(--dsw-alias-button-primary-hover);
 }
+
+/* ── toolbar extras: auto refresh ───────────────────────────────────────── */
+
+.autoButton {
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  background: transparent;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-secondary);
+  white-space: nowrap;
+}
+
+.autoButton:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-primary);
+}
+
+.autoButtonOn {
+  border-color: var(--dsw-static-green-500);
+  color: var(--dsw-static-green-600, var(--dsw-static-green-500));
+  background: color-mix(
+    in srgb,
+    var(--dsw-static-green-500, rgb(34, 197, 94)) 12%,
+    transparent
+  );
+}
+
+/* ── insights panel ─────────────────────────────────────────────────────── */
+
+.insightPanel {
+  padding-top: 12px;
+  padding-bottom: 12px;
+}
+
+.insightList {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.insightItem {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-secondary);
+}
+
+.insightDot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  transform: translateY(-1px);
+}
+
+.insightGood {
+  background: var(--dsw-static-green-500);
+}
+
+.insightInfo {
+  background: var(--dsw-static-blue-500);
+}
+
+.insightWarn {
+  background: var(--dsw-static-amber-500);
+}
+
+/* ── skeleton placeholders ──────────────────────────────────────────────── */
+
+.skeletonCard,
+.skeletonPanel {
+  pointer-events: none;
+}
+
+.skeletonLine {
+  height: 11px;
+  border-radius: 6px;
+  background: linear-gradient(
+    90deg,
+    var(--dsw-alias-interactive-bg-hover) 25%,
+    color-mix(
+      in srgb,
+      var(--dsw-alias-label-tertiary) 18%,
+      var(--dsw-alias-interactive-bg-hover)
+    ) 50%,
+    var(--dsw-alias-interactive-bg-hover) 75%
+  );
+  background-size: 200% 100%;
+  animation: usageShimmer 1.4s ease infinite;
+}
+
+.skeletonWide {
+  width: 60%;
+  margin-bottom: 8px;
+}
+
+.skeletonValue {
+  width: 40%;
+  height: 18px;
+  margin-bottom: 8px;
+}
+
+.skeletonTall {
+  width: 100%;
+  height: 64px;
+  margin-top: 12px;
+}
+
+@keyframes usageShimmer {
+  0% {
+    background-position: 200% 0;
+  }
+
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeletonLine {
+    animation: none;
+  }
+}
+
+/* ── breakdown: search, sort, badges, context meter, clickable rows ─────── */
+
+.searchBox {
+  flex: 1;
+  min-width: 0;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--dsw-alias-border-l2);
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-module-platform);
+  font-family: inherit;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-primary);
+}
+
+.searchBox:focus {
+  outline: none;
+  border-color: var(--dsw-static-deepseek-500);
+}
+
+/* Session rows are buttons (click = open the session); reset the chrome. */
+button.row {
+  width: 100%;
+  border: none;
+  background: transparent;
+  font-family: inherit;
+  text-align: left;
+}
+
+.rowClickable {
+  cursor: pointer;
+}
+
+.rowClickable:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  line-height: 16px;
+  vertical-align: 1px;
+}
+
+.badgeSub {
+  border: 1px solid color-mix(
+    in srgb,
+    var(--dsw-static-deepseek-500) 45%,
+    transparent
+  );
+  color: var(--dsw-static-deepseek-500);
+}
+
+.badgeRun {
+  border: 1px solid color-mix(
+    in srgb,
+    var(--dsw-static-green-500) 45%,
+    transparent
+  );
+  color: var(--dsw-static-green-600, var(--dsw-static-green-500));
+}
+
+.rowContext {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  width: 76px;
+  font-size: 10px;
+  line-height: 14px;
+  font-variant-numeric: tabular-nums;
+  color: var(--dsw-alias-label-tertiary);
+}
+
+.rowContextBar {
+  flex: none;
+  width: 40px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--dsw-alias-interactive-bg-hover);
+  overflow: hidden;
+}
+
+.rowContextFill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--dsw-static-deepseek-500);
+}
+
+.rowContextWarn .rowContextFill {
+  background: var(--dsw-static-amber-500);
+}
+
+.rowContextWarn .rowContextPct {
+  color: var(--dsw-static-amber-600, rgb(217, 119, 6));
+  font-weight: 500;
+}
+
+/* ── trend chart: cache-rate line ───────────────────────────────────────── */
+
+.rateLine {
+  fill: none;
+  stroke: var(--usage-cache-read);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* ── heatmap: busiest cell ring + legend caption ────────────────────────── */
+
+.cellPeak {
+  box-shadow: 0 0 0 1.5px var(--dsw-static-amber-500);
+}
+
+.heatmapPeak {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}

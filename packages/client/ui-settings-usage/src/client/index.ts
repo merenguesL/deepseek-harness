@@ -2,13 +2,14 @@
  * Usage statistics settings section, browser half: registers the Usage page
  * in the settings nav and binds its store to the connection. The report is
  * read-only, so the page has no write path; freshness rides the refresh
- * button and connection resets, never a pushed invalidation.
- * Export discipline:
+ * button, the optional 30-second auto refresh, and connection resets, never
+ * a pushed invalidation. Export discipline:
  * packages/client/AGENTS.md.
  */
 
 import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
-import type { ConnectionHandle } from '@deepseek-ai/dsh-api-remotes/client'
+import type { SessionRuntime } from '@deepseek-ai/dsh-client-runtime/client'
+import type { ConnectionHandle, SessionId } from '@deepseek-ai/dsh-api-remotes/client'
 // Type-only: pulls the shell's SlotMap merge (the 'settings.section' entry).
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 // Type-only: pulls the locale plugin's Context merge (ctx.locale).
@@ -18,7 +19,7 @@ import type { UsageSectionInjected } from './UsageSection.tsx'
 import { UsageStore } from './store.ts'
 import { buildUsageReport } from './report.ts'
 import type { UsageReportSource } from './report-types.ts'
-import { en, zh, type UsageKey } from './locales.ts'
+import { zh, type UsageKey } from './locales.ts'
 
 export type { UsageSectionInjected, UsageSectionProps } from './UsageSection.tsx'
 export type { UsageKey } from './locales.ts'
@@ -38,6 +39,8 @@ const NS = 'settings.usage'
  * Required services (cordis fiber inject). The target slot is declared by
  * ui-settings' apply, whose activation order relative to this one is NOT
  * constrained; registration depends on each slot through `slots.inject()`.
+ * The sessions service stays OPTIONAL (the jump-to-session affordance hides
+ * without it), so it is read with `ctx.get` rather than awaited.
  */
 export const inject = ['slots', 'locale', 'connection']
 
@@ -49,7 +52,9 @@ export const inject = ['slots', 'locale', 'connection']
  * @param ctx - client root context.
  */
 export function apply(ctx: ClientContext): void {
-  ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'ui-settings-usage: copy dictionaries')
+  // Chinese-only copy: the zh dictionary fills both shipped locale seats so
+  // the typed registration stays complete and no locale can miss a key.
+  ctx.effect(() => ctx.locale.register(NS, { zh, en: zh }), 'ui-settings-usage: copy dictionaries')
 
   const connection = ctx.get('connection') as ConnectionHandle
   const source: UsageReportSource = {
@@ -60,10 +65,21 @@ export function apply(ctx: ClientContext): void {
     },
   }
   const controller = new UsageStore(source)
+  // Optional affordance face: opening a session from the breakdown list.
+  // Absent (and the affordance hidden) in compositions without the service.
+  const sessions = ctx.get('sessions') as SessionRuntime | undefined
+  const openSession = sessions === undefined
+    ? undefined
+    : (sessionId: SessionId) => { sessions.open(sessionId) }
   // Registration-time text (the nav label thunk) and the inject faces share
   // one bound translate; copy freshness rides the locale revision.
   const t = ctx.locale.bind(NS) as UsageSectionInjected['t']
-  const injected = (): UsageSectionInjected => ({ controller, hooks: { snapshot: controller.store }, t })
+  const injected = (): UsageSectionInjected => ({
+    controller,
+    hooks: { snapshot: controller.store, locale: ctx.locale },
+    t,
+    ...(openSession === undefined ? {} : { openSession }),
+  })
 
   // A connection reset may have lost the session the report was built from;
   // the next mount refreshes from the wire again.

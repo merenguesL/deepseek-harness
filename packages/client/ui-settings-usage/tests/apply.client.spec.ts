@@ -71,14 +71,14 @@ describe('ui-settings-usage apply', () => {
     expect(after.slots.entries('settings.section')[0]!.component).toBe(UsageSection)
   })
 
-  it('the label thunk follows the active locale without re-registration', async () => {
+  it('serves the Chinese-only copy in every locale without re-registration', async () => {
     const b = await bench()
     declare(b.slots)
     await b.ctx.plugin({ inject: [...inject], apply }).await()
     const injected = b.slots.entries('settings.section')[0]!.inject as unknown as () => import('../src/client/UsageSection.tsx').UsageSectionInjected
     b.locale.setLocale('en')
-    expect(resolveSlotLabel(b.slots.entries('settings.section')[0]!.options.label)).toBe('Usage stats')
-    expect(injected().t('totalTokens')).toBe('Total tokens')
+    expect(resolveSlotLabel(b.slots.entries('settings.section')[0]!.options.label)).toBe('用量统计')
+    expect(injected().t('totalTokens')).toBe('总 Tokens')
     b.locale.setLocale('zh')
     expect(resolveSlotLabel(b.slots.entries('settings.section')[0]!.options.label)).toBe('用量统计')
   })
@@ -120,5 +120,50 @@ describe('ui-settings-usage apply', () => {
     b.ctx.emit('connection/reset')
     await Promise.resolve()
     expect(controller.store.getSnapshot().status).toBe('ready')
+  })
+})
+
+describe('ui-settings-usage sessions face', () => {
+  it('exposes openSession only when the optional sessions service exists', async () => {
+    const b = await bench()
+    declare(b.slots)
+    await b.ctx.plugin({ inject: [...inject], apply }).await()
+    const injected = b.slots.entries('settings.section')[0]!.inject as unknown as () => import('../src/client/UsageSection.tsx').UsageSectionInjected
+    // The bench composition provides no sessions service: the affordance face is absent.
+    expect(injected().openSession).toBeUndefined()
+
+    const opened: string[] = []
+    const withSessions = await bench()
+    withSessions.ctx.provide('sessions', {
+      open: (id: string) => { opened.push(id) },
+    } as never)
+    declare(withSessions.slots)
+    await withSessions.ctx.plugin({ inject: [...inject], apply }).await()
+    const withFace = withSessions.slots.entries('settings.section')[0]!.inject as unknown as () => import('../src/client/UsageSection.tsx').UsageSectionInjected
+    withFace().openSession!('session-1' as never)
+    expect(opened).toEqual(['session-1'])
+  })
+
+  it('binds the locale snapshot source for locale-aware formatting', async () => {
+    const b = await bench()
+    declare(b.slots)
+    await b.ctx.plugin({ inject: [...inject], apply }).await()
+    const injected = b.slots.entries('settings.section')[0]!.inject as unknown as () => import('../src/client/UsageSection.tsx').UsageSectionInjected
+    expect(injected().hooks.locale.getSnapshot().active).toBe('zh')
+  })
+})
+
+describe('ui-settings-usage wire failures', () => {
+  it('surfaces a refused session.list response as a store error', async () => {
+    const b = await bench()
+    declare(b.slots)
+    b.connection.api.sessions.list = async () => ({
+      result: { ok: false, error: { code: 'internal', message: 'list refused', details: {} } } as never,
+    })
+    await b.ctx.plugin({ inject: [...inject], apply }).await()
+    const injected = b.slots.entries('settings.section')[0]!.inject as unknown as () => import('../src/client/UsageSection.tsx').UsageSectionInjected
+    await injected().controller.load()
+    expect(injected().controller.store.getSnapshot().status).toBe('error')
+    expect(injected().controller.store.getSnapshot().error).toBe('list refused')
   })
 })
