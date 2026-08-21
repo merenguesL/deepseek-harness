@@ -2,7 +2,7 @@
 
 Status: implemented
 
-English | [English](2026-08-19-shipped-minimal-rtk-preset.md)
+[English](2026-08-19-shipped-minimal-rtk-preset.md) | 中文
 
 ## Problem
 

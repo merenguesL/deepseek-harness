@@ -4,7 +4,7 @@ Status: implemented
 
 [English](2026-08-14-assistant-output-tint-appearance.md) | 中文
 
-> 调色盘决策已被[单一固定颜色决策](../simplification/2026-08-15-output-tint-single-fixed-color.md)取代：外观行现在只有一个开关加产品固定颜色。
+> 调色盘决策已被[单一固定颜色决策](../simplification/2026-08-15-output-tint-single-fixed-color.zh.md)取代：外观行现在只有一个开关加产品固定颜色。
 
 ## 问题
 
@@ -12,7 +12,7 @@ Status: implemented
 
 ## 决策
 
-**主题插件拥有该偏好，会话插件负责渲染。** `ui-theme` 的持久化 section 新增 `outputTint`，一个通过既有 settings scope 持久化的 CSS 颜色字符串（空字符串表示关闭；该边界由 [Host settings 支撑的偏好决策](../bug-fix/2026-08-06-host-backed-web-preferences.md) 拥有）。
+**主题插件拥有该偏好，会话插件负责渲染。** `ui-theme` 的持久化 section 新增 `outputTint`，一个通过既有 settings scope 持久化的 CSS 颜色字符串（空字符串表示关闭；该边界由 [Host settings 支撑的偏好决策](../bug-fix/2026-08-06-host-backed-web-preferences.zh.md) 拥有）。
 
 ## 曾考虑的替代方案
 

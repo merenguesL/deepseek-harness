@@ -6,7 +6,7 @@ Status: implemented
 
 ## Problem
 
-用量仪表盘（[2026-08-14-settings-usage-dashboard.md](2026-08-14-settings-usage-dashboard.md)）只读取每行 `session.list` 的 `tokenUsage` 投影：会话在明细里显示尾部 id 占位符而非标题，上下文占用与构成投影未被使用，页面也无法对所展示的内容采取行动（不能跳转会话、不能导出、没有持续刷新）。用户还看不到哪些会话接近上下文窗口上限、子代理贡献了多少用量。
+用量仪表盘（[2026-08-14-settings-usage-dashboard.zh.md](2026-08-14-settings-usage-dashboard.zh.md)）只读取每行 `session.list` 的 `tokenUsage` 投影：会话在明细里显示尾部 id 占位符而非标题，上下文占用与构成投影未被使用，页面也无法对所展示的内容采取行动（不能跳转会话、不能导出、没有持续刷新）。用户还看不到哪些会话接近上下文窗口上限、子代理贡献了多少用量。
 
 ## Decision
 

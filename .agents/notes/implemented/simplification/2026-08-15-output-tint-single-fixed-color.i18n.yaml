@@ -3,4 +3,4 @@
 # after editing either side, bring the other along and re-record with:
 #   pnpm run verify-translation-pairing --write .agents/notes/implemented/simplification/2026-08-15-output-tint-single-fixed-color.md
 2026-08-15-output-tint-single-fixed-color.md: 8db49c411cb69adb9c7efddd0dd9659d3ccde2e7
-2026-08-15-output-tint-single-fixed-color.zh.md: 29743c70ac35938f3ac921e04f056e5b3e6e3aed
+2026-08-15-output-tint-single-fixed-color.zh.md: 96a46d0761b59de596deb49626c2812f45be54a0
